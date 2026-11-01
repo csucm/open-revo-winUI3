@@ -1,0 +1,7 @@
+https://github.com/faintonce/open-revo
+Branch: dev
+Commit: 72e98685b2c0538fa0a58409a6bcce9e7b6336f7
+Core base source, config and resources were copied from this revision. Standalone workspace manifest added.
+Native adaptations: bounded native_metrics and native_services; display_tuning extracted from the same revision's Tauri system module. Sleep policy errors and acknowledged EC lighting writes are checked; Native color/ICC preferences use isolated OpenRevoNative storage and read-only enumeration does not deploy Windows profiles. See ../../DESKTOP-SERVICES.md and project evidence for current changes. Original GPL license is retained.
+
+2026-10-31: Core and registry synchronized to latest dev (Core 0.9.5). Lighting acknowledgements and isolated Native service patches were three-way preserved. Native custom overlay follows upstream mode4 Balanced. Tauri plugins/cloud ICC/CPU Guardian/GPU curve plugins are not integrated into the native host.
