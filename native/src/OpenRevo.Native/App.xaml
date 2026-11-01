@@ -1,0 +1,110 @@
+<Application x:Class="OpenRevo.Native.App" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <!-- Radix Slate 2/3/6: card / inset / separator. Blue 5/7/11: selected fill / border / text. -->
+          <SolidColorBrush x:Key="DesignCardFill" Color="#F9F9FB" />
+          <SolidColorBrush x:Key="DesignInsetFill" Color="#F0F0F3" />
+          <SolidColorBrush x:Key="DesignStroke" Color="#D9D9E0" />
+          <SolidColorBrush x:Key="SemanticBlue" Color="#1869B4" />
+          <SolidColorBrush x:Key="SemanticPurple" Color="#7040BB" />
+          <SolidColorBrush x:Key="SemanticGreen" Color="#087F5B" />
+          <SolidColorBrush x:Key="SemanticAmber" Color="#A86508" />
+          <SolidColorBrush x:Key="SemanticPink" Color="#B51E78" />
+          <SolidColorBrush x:Key="SemanticCyan" Color="#007E91" />
+          <SolidColorBrush x:Key="SemanticRed" Color="#C63D41" />
+          <SolidColorBrush x:Key="SemanticSlate" Color="#56657A" />
+          <SolidColorBrush x:Key="ChoiceFill" Color="#C2E5FF" />
+          <SolidColorBrush x:Key="ChoiceStroke" Color="#8EC8F6" />
+          <SolidColorBrush x:Key="ChoiceText" Color="#0D74CE" />
+          <SolidColorBrush x:Key="DetailBadgeFill" Color="#E6F4FE" />
+          <SolidColorBrush x:Key="OverviewInk" Color="#1C2024" />
+          <SolidColorBrush x:Key="OverviewMuted" Color="#60646C" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Default">
+          <SolidColorBrush x:Key="DesignCardFill" Color="#18191B" />
+          <SolidColorBrush x:Key="DesignInsetFill" Color="#212225" />
+          <SolidColorBrush x:Key="DesignStroke" Color="#363A3F" />
+          <SolidColorBrush x:Key="SemanticBlue" Color="#7BC0FF" />
+          <SolidColorBrush x:Key="SemanticPurple" Color="#C6A4FF" />
+          <SolidColorBrush x:Key="SemanticGreen" Color="#6CDBAD" />
+          <SolidColorBrush x:Key="SemanticAmber" Color="#F3C36B" />
+          <SolidColorBrush x:Key="SemanticPink" Color="#EE9ACF" />
+          <SolidColorBrush x:Key="SemanticCyan" Color="#74D4DD" />
+          <SolidColorBrush x:Key="SemanticRed" Color="#F59B9E" />
+          <SolidColorBrush x:Key="SemanticSlate" Color="#BDCADB" />
+          <SolidColorBrush x:Key="ChoiceFill" Color="#004074" />
+          <SolidColorBrush x:Key="ChoiceStroke" Color="#205D9E" />
+          <SolidColorBrush x:Key="ChoiceText" Color="#70B8FF" />
+          <SolidColorBrush x:Key="DetailBadgeFill" Color="#0D2847" />
+          <SolidColorBrush x:Key="OverviewInk" Color="#EDEEF0" />
+          <SolidColorBrush x:Key="OverviewMuted" Color="#B0B4BA" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+      <ResourceDictionary.MergedDictionaries><XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" /></ResourceDictionary.MergedDictionaries>
+      <Style x:Key="FanCurveThumbStyle" TargetType="Thumb">
+        <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Thumb">
+          <Ellipse Fill="{TemplateBinding Background}" Stroke="White" StrokeThickness="1.5" />
+        </ControlTemplate></Setter.Value></Setter>
+      </Style>
+      <Style x:Key="SelectedChoiceStyle" TargetType="Button">
+        <Setter Property="Background" Value="{ThemeResource ChoiceFill}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource ChoiceStroke}" />
+        <Setter Property="Foreground" Value="{ThemeResource ChoiceText}" />
+        <Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="6" />
+        <Setter Property="UseSystemFocusVisuals" Value="True" />
+        <Setter Property="Template">
+          <Setter.Value>
+            <ControlTemplate TargetType="Button">
+              <Grid x:Name="ChoiceRoot" Background="Transparent">
+                <VisualStateManager.VisualStateGroups>
+                  <VisualStateGroup x:Name="CommonStates">
+                    <VisualState x:Name="Normal" />
+                    <VisualState x:Name="PointerOver" />
+                    <VisualState x:Name="Pressed">
+                      <VisualState.Setters><Setter Target="ChoiceSurface.Opacity" Value="0.8" /></VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="Disabled">
+                      <VisualState.Setters><Setter Target="ChoiceSurface.Opacity" Value="0.45" /></VisualState.Setters>
+                    </VisualState>
+                  </VisualStateGroup>
+                </VisualStateManager.VisualStateGroups>
+                <!-- Selection belongs to the control, independent of pointer state. -->
+                <Border x:Name="ChoiceSurface" Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                  <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                                    ContentTransitions="{TemplateBinding ContentTransitions}"
+                                    HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                    VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                    Foreground="{TemplateBinding Foreground}" />
+                </Border>
+              </Grid>
+            </ControlTemplate>
+          </Setter.Value>
+        </Setter>
+      </Style>
+      <Style x:Key="CardStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource DesignCardFill}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource DesignStroke}" />
+        <Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="12" /><Setter Property="Padding" Value="20" />
+      </Style>
+      <!-- Shared visual tokens apply to mini as well; its layout stays unchanged. -->
+      <Style x:Key="DetailChoiceStyle" TargetType="Button">
+        <Setter Property="Background" Value="{ThemeResource DesignCardFill}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource DesignStroke}" />
+        <Setter Property="BorderThickness" Value="1" /><Setter Property="CornerRadius" Value="10" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" /><Setter Property="Padding" Value="16" />
+      </Style>
+      <Style x:Key="DetailBadgeStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource DetailBadgeFill}" />
+        <Setter Property="CornerRadius" Value="10" /><Setter Property="Width" Value="44" /><Setter Property="Height" Value="44" />
+      </Style>
+      <Style x:Key="DetailBadgeIconStyle" TargetType="FontIcon">
+        <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+        <Setter Property="FontSize" Value="21" />
+      </Style>
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>

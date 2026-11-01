@@ -1,0 +1,16 @@
+bin/
+bin-*/
+obj/
+target/
+node_modules/
+app-*-final/
+core-proof/
+evidence/
+reference/
+*.pdb
+*.dmp
+*.DMP
+*.log
+native-source-*.zip
+data/
+diagnostics/
