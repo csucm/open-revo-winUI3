@@ -55,14 +55,21 @@ public sealed partial class MainWindow
     private void ApplyPageDesign()
     {
         int generation=++designGeneration;
+        bool shapeChange=panelShapeChanging;
+        string surface=mini?"mini":currentPage+(customTuningOpen?"-tuning":colorTuningOpen?"-color":"");
+        if(shapeChange)
+        {
+            Design.Typography(root);lastDesignSurface=surface;
+            pageEntrance?.Stop();page.Opacity=1;
+            return;
+        }
         DispatcherQueue.TryEnqueue(()=>
         {
             if(closed||generation!=designGeneration)return;
             root.UpdateLayout();Design.Typography(root);
-            string surface=mini?"mini":currentPage+(customTuningOpen?"-tuning":colorTuningOpen?"-color":"");
             if(surface==lastDesignSurface)return;lastDesignSurface=surface;
             pageEntrance?.Stop();page.Opacity=1;
-            if(!Design.MotionEnabled)return;
+            if(shapeChange||!Design.MotionEnabled)return;
             var fade=new DoubleAnimation{From=0,To=1,Duration=TimeSpan.FromMilliseconds(250),EasingFunction=new CubicEase{EasingMode=EasingMode.EaseOut}};
             Storyboard.SetTarget(fade,page);Storyboard.SetTargetProperty(fade,"Opacity");
             pageEntrance=new Storyboard();pageEntrance.Children.Add(fade);pageEntrance.Begin();

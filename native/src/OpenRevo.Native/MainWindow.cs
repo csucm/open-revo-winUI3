@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Dispatching;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -100,7 +100,7 @@ public sealed partial class MainWindow : Window
         AddNavigation("灯光与设备", "devices", Symbol.Keyboard);
         AddNavigation("插件兼容", "plugins", Symbol.Library);
         AddNavigation("设置与诊断", "settings", Symbol.Setting);
-        var footer = Ui.Text("原生版 0.8", 12, muted: true);
+        var footer = Ui.Text("原生版 0.9.7", 12, muted: true);
         footer.Margin = new Thickness(16, 8, 8, 16); navigation.PaneFooter = null;
         scroll.Content = page; navigation.Content = scroll;
         scroll.SizeChanged += (_,_) => QueueDesktopViewport();
@@ -119,10 +119,12 @@ public sealed partial class MainWindow : Window
             if(upstream!=null&&!desktopRuntimeClosed){args.Cancel=true;_ = CloseDesktopRuntime();}
         };
         Activated += (_,_)=>AlignCaption();
+        Closed += (_,_)=>{panelCompositionGuard?.Dispose();extensionHost?.Dispose();};
         Closed += (_, _) => { closed = true;DisposeTray(); DetachDesktopPowerEvents();timer.Stop(); powerTimer?.Stop();capsLockObserver?.Dispose(); nativeOsd?.Dispose();lightingDebounce?.Cancel(); try {sessionPower?.Dispose();}finally{screenOffPower?.Dispose();} _ = Task.Run(() => { temperatures.Dispose(); upstream?.Dispose(); }); };
         root.Loaded += async (_, _) =>
         {
             if (initialized) return; initialized = true;
+            if(App.IsPanelShapeReview){await RunPanelShapeReview();return;}
             AlignCaption();
             root.XamlRoot.Changed+=(_,_)=>{if(Math.Abs(root.XamlRoot.RasterizationScale-captionScale)>0.001)AlignCaption();};
             try { identity = await Task.Run(DeviceIdentity.Read); }
@@ -160,6 +162,7 @@ public sealed partial class MainWindow : Window
     {
         if (!IsVisibleNow()) return;
         latest = telemetry.Read();
+        extensionHost?.Publish(new(DateTimeOffset.Now, latest.CpuPercent, latest.UsedMemoryGiB, latest.TotalMemoryGiB, latest.BatteryPercent, latest.OnAc));
         if (ecTask is { IsCompleted: true })
         {
             if (ecEnabled) ec = ecTask.IsCompletedSuccessfully ? ecTask.Result : new(null, null, null, null, "EC 读取异常，数据不可用");
@@ -228,7 +231,7 @@ public sealed partial class MainWindow : Window
         finally { syncingNavigation=false; }
         string title = currentPage switch { "power" => "电源与电池", "display" => "显卡与屏幕", "devices" => "灯光与设备", "plugins" => "插件兼容", "settings" => "设置与诊断", _ => "状态总览" };
         if(currentPage=="plugins")
-        {page.Children.Add(Ui.Text(title,28,true));}
+        {page.Children.Add(DetailHeader(title,"管理原生扩展，查看可用能力与兼容状态。","plugins"));}
         else if(currentPage=="overview")
         {
             page.Children.Add(OverviewHeader());
@@ -293,16 +296,25 @@ public sealed partial class MainWindow : Window
         else RenderDesktopDisplay();
     }
     private void RenderDevices() => RenderDesktopDevices();
-    private void RenderPlugins()
-    {
-        page.Children.Add(Ui.Card(Ui.Stack(Ui.Text("Fluent 外观，原生实现", 22, true), Ui.Text("参考之前的 Fluent 插件：浅灰底色、白色卡片、左侧导航与 Windows 强调色。控件采用 WinUI 3，支持系统字体缩放和键盘导航。", 14, muted: true))));
-        page.Children.Add(Ui.Notice("旧版网页插件暂不兼容", "CSS / HTML / JavaScript 插件不能直接用于 WinUI 控件。此版不加载网页、插件脚本或插件伴随服务，因此没有插件 WebView2 常驻进程。"));
-        page.Children.Add(Ui.Card(Ui.Stack(Ui.Text("迁移状态", 18, true), Ui.Text("已实现：原生导航、状态卡、迷你窗口、主题切换。\n未实现：插件市场、网页小组件、原版 OSD 与自定义脚本。", 14, muted: true))));
-    }
     private void RenderSettings()=>RenderSystemSettings();
     private void ToggleMini()
     {
+        if(closed||panelShapeChanging)return;
         CloseCaptionExpandTip();
+        bool wasVisible=AppWindow.IsVisible,showFallback=false;
+        double previousWidth=root.Width,previousHeight=root.Height;
+        panelShapeChanging=true;
+        pageEntrance?.Stop();page.Opacity=1;
+        void ProtectComposition()
+        {
+            if(panelCompositionGuard!=null||(!wasVisible&&!initialized))return;
+            panelCloakStarted=System.Diagnostics.Stopwatch.GetTimestamp();
+            panelCompositionGuard=new PanelCompositionGuard(captionWindow);
+            if(!panelCompositionGuard.Cloaked&&wasVisible){AppWindow.Hide();showFallback=true;}
+        }
+        try
+        {
+        if(!mini&&AppWindow.Presenter is OverlappedPresenter restore&&restore.State!=OverlappedPresenterState.Restored){ProtectComposition();restore.Restore();}
         mini = !mini;
         if (mini)
         {
@@ -310,24 +322,39 @@ public sealed partial class MainWindow : Window
             normalBounds = new(AppWindow.Position.X, AppWindow.Position.Y, AppWindow.Size.Width, AppWindow.Size.Height);
             navigation.PaneDisplayMode = NavigationViewPaneDisplayMode.LeftMinimal;
             navigation.IsPaneOpen = false; navigation.IsPaneVisible = false;
-            page.Padding = new Thickness(12, 4, 12, 10); page.Spacing = 6; ResizeLogical(400, 640);
-            Title = "Open-Revo Mini";
+            page.Padding = new Thickness(12, 4, 12, 10); page.Spacing = 6;
             captionLabel.Text = "Open-Revo";miniLabel.Visibility=Visibility.Visible;
             captionLabel.FontSize = 13;
-            if (AppWindow.Presenter is OverlappedPresenter presenter) { presenter.IsMaximizable = captionModeAttached; presenter.IsResizable = false; }
-            DockMini();
         }
         else
         {
             navigation.IsPaneVisible = true; navigation.PaneDisplayMode = NavigationViewPaneDisplayMode.Left; navigation.IsPaneOpen = true;
-            Title = "Open-Revo";
             captionLabel.Text = "Open-Revo";
             miniLabel.Visibility=Visibility.Collapsed;
             captionLabel.FontSize = 14;
-            if (AppWindow.Presenter is OverlappedPresenter presenter) { presenter.IsMaximizable = true; presenter.IsResizable = true; }
-            page.Padding = new Thickness(28); page.Spacing = 18;var minimum=MinimumDesktopPixels();normalBounds.Width=Math.Max(normalBounds.Width,minimum.Width);normalBounds.Height=Math.Max(normalBounds.Height,minimum.Height);AppWindow.MoveAndResize(normalBounds);
+            page.Padding = new Thickness(28); page.Spacing = 18;var minimum=MinimumDesktopPixels();normalBounds.Width=Math.Max(normalBounds.Width,minimum.Width);normalBounds.Height=Math.Max(normalBounds.Height,minimum.Height);
         }
+        var targetBounds=mini?MiniPanelBounds():normalBounds;
+        panelTargetPixelWidth=targetBounds.Width;
         UpdatePanelToggle(); Render();
+        PreparePanelLayout(targetBounds);
+        ProtectComposition();
+        Title=mini?"Open-Revo Mini":"Open-Revo";
+        if(AppWindow.Presenter is OverlappedPresenter presenter){presenter.IsMaximizable=!mini||captionModeAttached;presenter.IsResizable=!mini;}
+        AppWindow.MoveAndResize(targetBounds);
+        root.Width=previousWidth;root.Height=previousHeight;
+        AlignCaption();ArrangeDesktopViewport();root.UpdateLayout();
+        if(panelCompositionGuard!=null)panelShapeCompletion=FinishPanelShape(showFallback);
+        else {panelShapeChanging=false;panelTargetPixelWidth=0;}
+        }
+        catch
+        {
+            root.Width=previousWidth;root.Height=previousHeight;
+            panelTargetPixelWidth=0;
+            panelCompositionGuard?.Dispose();panelCompositionGuard=null;panelShapeChanging=false;
+            if(showFallback&&!closed&&!trayHidden)AppWindow.Show();
+            throw;
+        }
     }
     private void UpdatePanelToggle()
     {
@@ -342,12 +369,12 @@ public sealed partial class MainWindow : Window
     {
         RenderCompactPanel();
     }
-    private void DockMini()
+    private RectInt32 MiniPanelBounds()
     {
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
-        int margin = (int)Math.Round(12 * GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96d);
-        AppWindow.Move(new(area.X + Math.Max(margin, area.Width - AppWindow.Size.Width - margin),
-            area.Y + Math.Max(margin, area.Height - AppWindow.Size.Height - margin)));
+        double scale=GetDpiForWindow(captionWindow)/96d;if(scale<=0)scale=1;
+        int margin=(int)Math.Round(12*scale),width=Math.Min((int)(400*scale),Math.Max(1,area.Width-40)),height=Math.Min((int)(640*scale),Math.Max(1,area.Height-40));
+        return new(area.X+Math.Max(margin,area.Width-width-margin),area.Y+Math.Max(margin,area.Height-height-margin),width,height);
     }
     private async Task<bool> Confirm(string title, string message)
     {
@@ -388,3 +415,5 @@ public sealed partial class MainWindow : Window
     }
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
 }
+
+

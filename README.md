@@ -1,61 +1,72 @@
-# OpenRevo Native · WinUI 3 社区移植版
+# OpenRevo Native · 原生界面，更轻占用
 
-这是基于 [faintonce/open-revo](https://github.com/faintonce/open-revo) 的 Windows WinUI 3 社区移植版本，由本 fork 维护。原版作者和贡献者的版权与许可保留。本仓库的 Native 版本不是原作者的官方发行版。
+这是基于[faintonce/open-revo](https://github.com/faintonce/open-revo)的WinUI 3社区移植版，保留原作者和贡献者版权及GPL许可。当前版本：**Native 0.9.7（预发布版）**。
 
-当前版本：**Native 0.9.6（预发布测试版）**。Native 版本号与底层 Core 版本独立；本版固定 Core 0.9.5，基准提交 `72e98685b2c0538fa0a58409a6bcce9e7b6336f7`，包含本地修复。
+[下载安装包](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.9.7/Open-Revo-0.9.7-Setup-x64.exe) · [下载对应源码](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.9.7/native-source-0.9.7.zip) · [完整发布页](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.9.7)
+
+Windows x64 · WinUI 3 社区版 · 2026-11-02
+
+全面重构为WinUI 3原生界面，适配Windows系统样式。日常界面不加载WebView2，减少网页多进程占用；mini常用控制、主题切换和硬件状态集中在一个轻量原生面板中。
+
+**历史mini短时测试中，工作集约降低50%。** 原版完整进程组平均约512 MiB，原生早期版本约243 MiB（约降低53%）；私有内存约282→176 MiB。数据来自2026-10-29前后早期版本记录，负载与测量时间未完全统一，不能当作0.9.7新基准或全场景保证。本次0.9.7未重新测量内存降幅。
+
+## 界面与日常使用
+
+- 原生日间/夜间主题，mini面板可一键切换。
+- 大面板支持自由调整窗口大小，mini失去焦点可自动收起。
+- mini可实时调节屏幕与键盘背光亮度，两类控件保持一致的视觉与交互。
+- 提供大小写锁定OSD提示，设置页保留诊断导出与资源记录。
+- 使用新的黑蓝圆角应用图标，应用、托盘、快捷方式及安装器统一来源。
+
+## 修复与优化
+
+- 纳入此前夜间图标、刷新率与灯光读取修正；按活动内置屏识别，避免仅适配开发机面板ID。
+- 诊断日志保留完整异常链、错误码与操作阶段，修复日志读取相关问题。
+- 优化最小化到mini、大小面板切换和二级页面返回；保留原生标题栏操作。
+- 修复色彩设置提交、风扇曲线坐标显示，并完善曲线编辑。
+- 配置保存采用原子替换和有限重试；更新助手通过.NET计算SHA256，减少特殊PowerShell环境影响。
+- 安装目录浏览保留原目录树、图标和操作方式，只过滤隐藏/系统目录。
+
+## 插件功能仍在开发中
+
+**插件系统尚未完成，目前仅有内置原生状态摘要示例和API 1.0基础接口。** 已建立状态订阅、白名单页面跳转、独立配置及版本/能力查询。暂不支持安装第三方插件、原版HTML/CSS/JavaScript插件或插件市场，硬件动作也未向扩展开放。有具体旧网页插件需求后，再增加可选兼容组件。
 
 ## 下载与安装
 
-从 [Native 0.9.6 Releases](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.9.6) 下载：
+下载`Open-Revo-0.9.7-Setup-x64.exe`；`native-source-0.9.7.zip`为GPL完整对应源码。Release不再额外提供校验文件下载；更新程序仍使用GitHub附件SHA256元数据校验。
 
-- `Open-Revo-0.9.6-Setup-x64.exe`：Windows x64 安装包。
-- `native-source-0.9.6.zip`：与该安装包对应的完整源码快照。
-- `SHA256SUMS.txt`：安装包和源码包校验值。
+本版安装包比早期共享运行时版本更大，主要原因是内置了.NET 10 x64运行时，无需再单独安装.NET 10。安装包体积与运行时内存占用是不同指标；包体增大不代表运行时内存同步增加。Windows App Runtime 2.5+仍是独立依赖。本版采用既有保守精简策略，保留裁剪兼容警告。新安装默认当前用户LocalAppData/Programs/OpenRevo；升级沿用原目录。安装前请从托盘正常退出旧版。
 
-运行需要 **.NET 10 x64 Desktop Runtime** 和 **Windows App Runtime 2.5+**。本版依赖共享运行时，不是完全自包含安装包。安装前从旧版托盘完整退出。程序会申请管理员权限以访问相应硬件接口。
+已进行后台回归、包内运行时专项、Rust与图标/源码核验。真实安装升级、完整WinUI交互、面板切换实屏残影、长期资源与远端机型仍有未验收项；高危调校和显卡重启切换继续遵守既有能力限制。
 
-## 0.9.6 主要变化
+此为社区预发布版，不是原作者官方发行版。预览图为本版源码在隔离只读宿主中的原生XAML渲染，未采集的硬件指标显示未知，不作为实机读数或性能测试。
 
-- 灯光与设备页恢复原版工作台排列，保留亮度条端点修正与实时提交。
-- 显卡三卡等高，复用原版图标、标题与说明；mini共用素材并保持既有布局。
-- 电池健康区恢复左侧三档模式、右侧电池示意图，电量与供电状态使用真实读数。
-- 纳入OSD白框的窗口框架修正，保留原版OSD素材与Caps提示。
-- 保留设置页原排版、诊断导出、退出失败恢复和资源趋势日志。
 
-完整说明见 [Native 发布说明](native/RELEASE-0.9.6.md)。
+## 界面预览
 
-## 源码结构
+以下为0.9.7源码在独立、普通权限、只读且不显示窗口的宿主中渲染的原生XAML客户区。未连接硬件，未知数据以占位显示；不代表实机性能测量。系统标题栏按钮不在XAML客户区图像中。
 
-| 路径 | 内容 |
-| --- | --- |
-| `native/src/OpenRevo.Native` | WinUI 3 界面、mini、托盘、OSD与交互 |
-| `native/src/OpenRevo.Core` | C# 系统服务、硬件能力与回读保护 |
-| `native/src/OpenRevo.CoreBridge` | Rust C ABI 桥接 |
-| `native/src/OpenRevo.Upstream` | 固定版本上游Core及资源，包含本地补丁 |
-| `native/src/OpenRevo.Checks` | 后台边界与专项检查 |
-| `native/build.ps1`、`native/installer.iss` | Native 构建与安装器 |
+### 日间主题
+![日间总览](docs/previews/native-0.9.7/overview-light.png)
 
-默认分支为 `dev`。根目录基于作者的 `dev` 分支（提交 `4a9bee11394324e878d3f9f9a4e81d25f0700b93`），保留 Tauri/React 上游源码与历史，供溯源和后续回馈使用。Native 自带的固定 Core 及本地补丁不因根目录基线调整而改变。`main` 保留原 0.9.6 发布历史，`native-v0.9.6` 标签和附件保持不变。原版文档见 [README.upstream.md](README.upstream.md)。根目录的 pnpm/Tauri 命令构建原版界面；Native 版本从 `native/` 构建。
+### 夜间主题
+![夜间总览](docs/previews/native-0.9.7/overview-dark.png)
 
-## 构建 Native
+### Mini面板
+![日间Mini](docs/previews/native-0.9.7/mini-light.png)
+![夜间Mini](docs/previews/native-0.9.7/mini-dark.png)
 
-Windows 上需要 .NET 10 SDK、Windows SDK、Rust MSVC 工具链、C++ 构建工具与 Inno Setup 6。根据本机安装位置提供工具路径：
+### 插件功能仍在开发中
+![插件基础接口预览](docs/previews/native-0.9.7/plugins-development.png)
+
+## 源码与构建
+
+Native界面与服务在`native/src/OpenRevo.Native`和`native/src/OpenRevo.Core`；Rust桥接与固定上游Core分别在`native/src/OpenRevo.CoreBridge`、`native/src/OpenRevo.Upstream`。当前固定Core 0.9.5并保留本地补丁；Native版本与Core独立。`native/src/OpenRevo.Cpp`为未完成原型，不是本次发行程序。
+
+Windows下进入`native/`，以.NET SDK 10、Windows SDK、MSVC、Rust MSVC及Inno Setup 6运行：
 
 ```powershell
-cd native
-./build.ps1 -DotNet dotnet -Cargo cargo -Iscc 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
+./build.ps1 -Compact -DotNet dotnet -Cargo cargo -Iscc 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
 ```
 
-有完整依赖缓存时可附加 `-Offline`。脚本会运行检查、生成运行负载、打包对应源码，并编译安装器。运行负载为 `native/app-0.9.6-final/`；安装器生成于 `native/` 的上一级。现有脚本保留发布源码快照中的实现，不要求用户使用开发机的私有路径。
-
-## 验证范围与已知限制
-
-已通过后台、诊断、风扇草稿、响应式布局几何、OSD框架、Core准入、Rust及发布桥接的只读检查。详见 [验证摘要](native/PUBLIC-VERIFICATION-0.9.6.json)。
-
-实际WinUI宽窄布局、主题、Flyout、电池示意和真实OSD白框消失仍待回测；GM5HG0A、GM6AQ7C等远端机型能力和长期资源增长仍待验证。不能据此宣称所有机型已适配、原版全部功能等价或内存泄漏已修复。高风险调校与硬件控制应在明确支持的能力范围内使用。
-
-反馈问题时请附版本、机型、复现步骤与导出诊断。提交前检查并移除私人路径、账户信息等不需要公开的数据。
-
-## 许可与来源
-
-沿用 **GPL-3.0-or-later**，保留原作者版权、声明与[许可全文](LICENSE)。分发修改版本时提供对应源码。Lucide原版图标的ISC许可见 [LUCIDE-LICENSE.txt](native/src/OpenRevo.Native/Assets/Nav/LUCIDE-LICENSE.txt)。其他随上游资源的许可与声明保持原样。
+缓存齐全可加`-Offline`。完整对应源码和精简保留策略随Release源码包提供。根目录保留上游Tauri/React源码供溯源，原版文档见[README.upstream.md](README.upstream.md)；它与Native构建路径不同。

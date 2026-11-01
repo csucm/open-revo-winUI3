@@ -30,7 +30,7 @@ public sealed partial class MainWindow
     private void UpdateDesktopNavigationMode()
     {
         if(mini)return;double dpi=GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this))/96d;if(dpi<=0)dpi=1;
-        double width=AppWindow.Size.Width/dpi;
+        double width=(panelShapeChanging&&panelTargetPixelWidth>0?panelTargetPixelWidth:AppWindow.Size.Width)/dpi;
         var mode=width<1180?NavigationViewPaneDisplayMode.LeftCompact:NavigationViewPaneDisplayMode.Left;
         if(navigation.PaneDisplayMode!=mode){navigation.PaneDisplayMode=mode;navigation.IsPaneOpen=mode==NavigationViewPaneDisplayMode.Left;}
     }

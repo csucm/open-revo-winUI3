@@ -93,7 +93,7 @@ public sealed partial class MainWindow
         page.Children.Add(lightingCard);
         Button Charge(string label, int limit)
         {
-            var button = MiniControl(label, () => hardware.SetBatteryPreset(limit), limit switch { 60=>"充至60%停止，适合长期插电",80=>"充至80%停止，兼顾寿命和续航",_=>"允许充满，适合外出使用" });
+            var button = MiniControl(label, () => hardware.SetBatteryPreset(limit), limit switch { 60=>"充至60%停止，低于55%恢复；不主动放电",80=>"充至80%停止，低于75%恢复；不主动放电",_=>"允许充满，适合外出使用" });
             compactChargeButtons[limit] = button; return button;
         }
         page.Children.Add(Group("", "电池健康", Columns(Charge("工作站", 60), Charge("平衡", 80), Charge("长效", 100))));

@@ -30,7 +30,7 @@ public sealed partial class MainWindow
         var choices=new List<FrameworkElement>();
         foreach(var(title,description,limit)in new[]{("长效模式","适合很长时间使用电池工作的环境。",100),("平衡模式","偶而会携带电脑工作，且不需要多余靠电池供电。",80),("工作站模式","如果很容易接续适配器工作，无携带电脑外出工作的需求，强烈建议使用此模式，延长电池的寿命。",60)})
         {
-            var button=Ui.Button(title,async(_,_)=>{if(hardware.Active)await RunHardware(()=>hardware.SetBatteryPreset(limit),"充电上限已回读确认。");});
+            var button=Ui.Button(title,async(_,_)=>{if(hardware.Active)await RunHardware(()=>hardware.SetBatteryPreset(limit),"充电上限已回读确认；已有电量不会主动下降。");});
             var radio=Ui.Text("○",14);radio.VerticalAlignment=VerticalAlignment.Center;desktopBatteryChoices[limit]=radio;
             var labels=Ui.Stack(Ui.Text($"{title} ({limit}%)",14,true),Ui.Text(description,12,muted:true));labels.Spacing=3;
             var body=new Grid{ColumnSpacing=10};body.ColumnDefinitions.Add(new(){Width=GridLength.Auto});body.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});body.Children.Add(radio);Grid.SetColumn(labels,1);body.Children.Add(labels);
@@ -41,7 +41,7 @@ public sealed partial class MainWindow
         var presets=Ui.Stack(choices.Cast<UIElement>().ToArray());presets.Spacing=6;
         var batteryLayout=new Grid{ColumnSpacing=14};batteryLayout.ColumnDefinitions.Add(new(){Width=new GridLength(1.3,GridUnitType.Star)});batteryLayout.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});
         batteryLayout.Children.Add(presets);var gauge=BatteryGauge();Grid.SetColumn(gauge,1);batteryLayout.Children.Add(gauge);
-        page.Children.Add(DetailSection("电池健康",batteryLayout,"主板硬件级充电控制 · 电池健康长寿模式",Value("miniLimit",12)));
+        page.Children.Add(DetailSection("电池健康",batteryLayout,"仅限制后续充电，不主动放电；超过上限时电量不会立即下降。",Value("miniLimit",12)));
         SyncDesktopServices();
     }
     private FrameworkElement DesktopGpuChoices()

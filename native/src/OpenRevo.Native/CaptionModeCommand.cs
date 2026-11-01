@@ -81,17 +81,14 @@ public sealed partial class MainWindow
     private bool QueuePanelMinimize()
     {
         if(closed||exitRequested||sessionEnding)return false;
-        if(panelMinimizeQueued)return true;
+        if(panelMinimizeQueued||panelShapeChanging)return true;
         bool fromMini=mini;panelMinimizeQueued=true;
         if(DispatcherQueue.TryEnqueue(()=>
         {
             try
             {
                 if(closed||exitRequested||sessionEnding)return;
-                // Restore before saving the full-panel bounds or resizing mini.
-                if(AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter&&
-                   (presenter.State==Microsoft.UI.Windowing.OverlappedPresenterState.Minimized||
-                    !fromMini&&presenter.State==Microsoft.UI.Windowing.OverlappedPresenterState.Maximized))presenter.Restore();
+                // ToggleMini restores full-panel bounds under the composition guard.
                 if(!fromMini)
                 {
                     if(!mini)ToggleMini();

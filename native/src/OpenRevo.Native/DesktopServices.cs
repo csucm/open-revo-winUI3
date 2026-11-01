@@ -26,7 +26,7 @@ public sealed partial class MainWindow
     {
         if(closingDesktopRuntime)return;closingDesktopRuntime=true;
         DiagnosticLog.Record("exit.services.started");
-        try{if(upstream!=null)await Task.Run(upstream.StopDesktopServices);desktopRuntimeClosed=true;DiagnosticLog.Record("exit.services.completed");if(!closed)Close();}
+        try{if(upstream!=null)await Task.Run(upstream.StopDesktopServices);desktopRuntimeClosed=true;DiagnosticLog.Record("exit.services.completed");if(!closed){StartPendingUpdate();Close();}}
         catch(Exception error)
         {
             DiagnosticLog.Failure("exit.services.failed",error,new{trayHidden,mini});

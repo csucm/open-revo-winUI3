@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8'?>
+<linker>
+  <assembly fullname="System.Private.CoreLib" preserve="all" />
+  <assembly fullname="System.Runtime" preserve="all" />
+  <assembly fullname="System.Linq" preserve="all" />
+  <assembly fullname="System.Xml.XDocument" preserve="all" />
+  <assembly fullname="System.Net.Http" preserve="all" />
+  <assembly fullname="System.Diagnostics.Process" preserve="all" />
+  <assembly fullname="System.IO.FileSystem" preserve="all" />
+  <assembly fullname="System.IO.FileSystem.Primitives" preserve="all" />
+  <assembly fullname="System.Text.Encodings.Web" preserve="all" />
+  <assembly fullname="System.Private.Xml.Linq" preserve="all" />
+</linker>

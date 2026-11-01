@@ -44,8 +44,6 @@ public static class AppData
         string directory = folder ?? DirectoryPath;
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, "preferences.json");
-        string temporary = Path.Combine(directory, $"preferences-{Guid.NewGuid():N}.tmp");
-        try { File.WriteAllText(temporary, JsonSerializer.Serialize(value)); File.Move(temporary, path, true); }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        lock (preferenceGate) AtomicPreferenceFile.Write(path, JsonSerializer.Serialize(value));
     }
 }

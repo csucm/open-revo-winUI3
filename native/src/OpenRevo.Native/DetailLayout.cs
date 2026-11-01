@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 
@@ -24,7 +24,7 @@ public sealed partial class MainWindow
     }
     private FrameworkElement DetailHeader(string title,string description,string glyph)
     {
-        FrameworkElement icon=title is "自定义调校" or "调色控制"?SemanticGraphic(title=="自定义调校"?"tuning":"color",20):PageIcon(title switch{"自定义调校"=>"tuning","调色控制"=>"color","显卡与屏幕"=>"display","电源与电池"=>"power","灯光与设备"=>"devices","设置与诊断"=>"settings",_=>"overview"});
+        FrameworkElement icon=title is "自定义调校" or "调色控制"?SemanticGraphic(title=="自定义调校"?"tuning":"color",20):PageIcon(title switch{"自定义调校"=>"tuning","调色控制"=>"color","显卡与屏幕"=>"display","电源与电池"=>"power","灯光与设备"=>"devices","设置与诊断"=>"settings","插件兼容"=>"plugins",_=>"overview"});
         icon.HorizontalAlignment=HorizontalAlignment.Center;icon.VerticalAlignment=VerticalAlignment.Center;
         var badge=new Border{Style=(Style)Application.Current.Resources["DetailBadgeStyle"],Child=icon,VerticalAlignment=VerticalAlignment.Center};
         var labels=Ui.Stack(Ui.Text(title,24,true),Ui.Text(description,12,muted:true));labels.Spacing=4;labels.VerticalAlignment=VerticalAlignment.Center;
@@ -95,3 +95,4 @@ public sealed partial class MainWindow
         if(tuningReturnMini&&!mini)ToggleMini();else Render();
     }
 }
+

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations"><ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration></ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{2A5886DA-188E-4972-973B-36F9BBAD541A}</ProjectGuid>
+    <RootNamespace>OpenRevo.Cpp</RootNamespace><ProjectName>OpenRevo.Cpp</ProjectName>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion><WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
+    <CppWinRTOptimized>true</CppWinRTOptimized><CppWinRTRootNamespaceAutoMerge>true</CppWinRTRootNamespaceAutoMerge>
+    <MinimalCoreWin>true</MinimalCoreWin><PreferredToolArchitecture>x64</PreferredToolArchitecture><ApplicationType>Windows Store</ApplicationType><ApplicationTypeRevision>10.0</ApplicationTypeRevision>
+    <AppContainerApplication>false</AppContainerApplication><AppxPackage>false</AppxPackage><WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained><WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
+    <OpenRevoNuGetRoot Condition="'$(OpenRevoNuGetRoot)'==''">D:\DevTools\NuGet\packages\</OpenRevoNuGetRoot>
+    <CppWinRTPackageRoot Condition="'$(CppWinRTPackageRoot)'==''">$(MSBuildThisFileDirectory)..\..\..\..\work\cpp-winrt-packages\microsoft.windows.cppwinrt\3.0.260818.1\</CppWinRTPackageRoot>
+    <GeneratedFilesDir>$(MSBuildThisFileDirectory)obj\$(Configuration)\Generated Files\</GeneratedFilesDir>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration"><ConfigurationType>Application</ConfigurationType><PlatformToolset>v145</PlatformToolset><UseDebugLibraries>false</UseDebugLibraries><WholeProgramOptimization>true</WholeProgramOptimization><CharacterSet>Unicode</CharacterSet></PropertyGroup>
+  <Import Project="$(VCTargetsPath)Microsoft.Cpp.props" />
+  <Import Project="$(CppWinRTPackageRoot)build\native\Microsoft.Windows.CppWinRT.props" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windows.sdk.buildtools\10.0.28000.2705\build\Microsoft.Windows.SDK.BuildTools.props" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windowsappsdk.base\2.0.4\build\native\Microsoft.WindowsAppSDK.Base.props" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windowsappsdk.foundation\2.3.12\build\native\Microsoft.WindowsAppSDK.Foundation.props" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windowsappsdk.interactiveexperiences\2.1.9\build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.props" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windowsappsdk.winui\2.3.9\build\native\Microsoft.WindowsAppSDK.WinUI.props" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windowsappsdk.runtime\2.5.1\build\native\Microsoft.WindowsAppSDK.Runtime.props" />
+  <PropertyGroup><OutDir>$(MSBuildThisFileDirectory)bin\$(Configuration)\</OutDir><IntDir>$(MSBuildThisFileDirectory)obj\$(Configuration)\</IntDir><TargetName>OpenRevo.Cpp</TargetName><GenerateManifest>true</GenerateManifest></PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile><DebugInformationFormat>OldStyle</DebugInformationFormat><LanguageStandard>stdcpp20</LanguageStandard><PrecompiledHeader>NotUsing</PrecompiledHeader><WarningLevel>Level4</WarningLevel><SDLCheck>true</SDLCheck><ConformanceMode>true</ConformanceMode><RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;DISABLE_XAML_GENERATED_MAIN;%(PreprocessorDefinitions)</PreprocessorDefinitions><AdditionalOptions>/utf-8 /bigobj %(AdditionalOptions)</AdditionalOptions><AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
+    <Link><GenerateMapFile>true</GenerateMapFile><MapFileName>$(IntDir)OpenRevo.Cpp.map</MapFileName><SubSystem>Windows</SubSystem><GenerateWindowsMetadata>false</GenerateWindowsMetadata><AdditionalDependencies>shell32.lib;comctl32.lib;dwmapi.lib;gdi32.lib;CoreMessaging.lib;windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Manifest><AdditionalManifestFiles>app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
+  </ItemDefinitionGroup>
+  <ItemGroup><ApplicationDefinition Include="App.xaml" /><ClInclude Include="pch.h" /><ClInclude Include="App.h" /><ClInclude Include="Shell.h" /><ClInclude Include="Bridge.h" /><ClInclude Include="PanelState.h" /><ClInclude Include="CapsWatcher.h" /><ClInclude Include="CapsTransitions.h" /><ClInclude Include="Osd.h" /><ClInclude Include="OsdFramePolicy.h" /><ClCompile Include="App.cpp" /><ClCompile Include="Shell.cpp" /><ClCompile Include="Bridge.cpp" /><ClCompile Include="Osd.cpp" /></ItemGroup>
+  <ItemGroup><Content Include="Assets\**\*" /><Content Include="App.ico" /><ResourceCompile Include="App.rc" /></ItemGroup>
+  <Import Project="$(VCTargetsPath)Microsoft.Cpp.targets" />
+  <Import Project="$(CppWinRTPackageRoot)build\native\Microsoft.Windows.CppWinRT.targets" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windows.sdk.buildtools\10.0.28000.2705\build\Microsoft.Windows.SDK.BuildTools.targets" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windowsappsdk.base\2.0.4\build\native\Microsoft.WindowsAppSDK.Base.targets" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windowsappsdk.foundation\2.3.12\build\native\Microsoft.WindowsAppSDK.Foundation.targets" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windowsappsdk.interactiveexperiences\2.1.9\build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.targets" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windowsappsdk.winui\2.3.9\build\native\Microsoft.WindowsAppSDK.WinUI.targets" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.windowsappsdk.runtime\2.5.1\build\native\Microsoft.WindowsAppSDK.Runtime.targets" />
+  <Import Project="$(OpenRevoNuGetRoot)microsoft.web.webview2\1.0.3719.77\build\native\Microsoft.Web.WebView2.targets" />
+</Project>
+

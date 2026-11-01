@@ -82,22 +82,7 @@ public sealed partial class MainWindow
         Add("\uE823","刷新间隔（秒）","面板隐藏后暂停界面采样；后台睡眠和供电策略继续运行。",Choice("刷新间隔",["2 秒","5 秒","10 秒"],Array.IndexOf(new[]{2,5,10},interval),async i=>{interval=new[]{2,5,10}[i];timer.Interval=TimeSpan.FromSeconds(interval);await SavePreferences();},112));
         var dataActions=SettingsControls(Ui.Button("打开目录",(_,_)=>OpenLocalFolder(AppData.DirectoryPath)),Ui.Button("迁移存储",async(_,_)=>await MigrateDataStorage()),Ui.Button("清除数据",async(_,_)=>await ClearDataStorage()));
         Add("\uEDA2","数据存储管理",dataMigrationTarget==null?"当前目录："+AppData.DirectoryPath:"已复制至："+dataMigrationTarget+"；下次完整退出并启动后使用。",dataActions,850);
-        var updateStatus=Ui.Text($"本版 {typeof(App).Assembly.GetName().Version?.ToString(3)} · Core 0.9.5 · dev 72e9868；更新仅检查，不自动安装。",12,muted:true);
-        var checkUpdate=Ui.Button("检查 dev 更新",async(sender,_)=>
-        {
-            var button=(Button)sender;button.IsEnabled=false;
-            try
-            {
-                using var client=new HttpClient{Timeout=TimeSpan.FromSeconds(10),MaxResponseContentBufferSize=1024*1024};client.DefaultRequestHeaders.UserAgent.ParseAdd("OpenRevo-Native/0.9.1");
-                string json=await client.GetStringAsync("https://api.github.com/repos/faintonce/open-revo/commits/dev");using var doc=JsonDocument.Parse(json);
-                string revision=doc.RootElement.GetProperty("sha").GetString()??throw new IOException("上游提交信息为空。");
-                if(revision.Length!=40||!revision.All(Uri.IsHexDigit))throw new IOException("上游提交信息无效。");
-                updateStatus.Text=revision=="72e98685b2c0538fa0a58409a6bcce9e7b6336f7"?"已同步当前 dev Core（"+revision[..7]+"）；不自动安装。":"dev 提交已变化："+revision[..7]+"；需合并核验后更新，不自动安装。";
-            }
-            catch(Exception error){updateStatus.Text="检查失败："+error.Message;}
-            finally{button.IsEnabled=true;}
-        });
-        var updateBody=Ui.Stack(DetailRow("\uE895","软件版本与分发更新","以作者 dev 分支为更新来源；手动检查提交，不自动安装。",SettingsControls(checkUpdate,Ui.Button("dev 提交页",async(_,_)=>await OpenSettings("https://github.com/faintonce/open-revo/commits/dev/")),Ui.Button("官方发布页",async(_,_)=>await OpenSettings("https://github.com/faintonce/open-revo/releases"))),1050),updateStatus);updateBody.Spacing=4;var updateInset=DetailInset(updateBody);updateInset.Padding=new Thickness(14,8,14,8);rows.Children.Add(updateInset);
+        rows.Children.Add(UpdateControls());
         var planChoice=new ComboBox{Width=180,MinHeight=36,Height=36,VerticalContentAlignment=VerticalAlignment.Center};bool syncingPlans=false;
         async Task ReadPlans()
         {

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
@@ -10,17 +10,21 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <UseWinUI>true</UseWinUI><WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
-    <SelfContained>false</SelfContained>
+    <SelfContained>true</SelfContained>
     <EnableWinAppRunSupport>false</EnableWinAppRunSupport><WinUISDKReferences>false</WinUISDKReferences>
     <DefaultItemExcludes>$(DefaultItemExcludes);bin*/**;obj/**</DefaultItemExcludes>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <PublishTrimmed>false</PublishTrimmed><PublishReadyToRun>false</PublishReadyToRun>
-    <Version>0.9.6</Version><Description>Open-Revo native control panel</Description>
+    <Version>0.9.7</Version><Description>Open-Revo native control panel</Description>
     <Title>Open-Revo</Title><Product>Open-Revo</Product><Company>Open-Revo Community</Company>
   </PropertyGroup>
   <PropertyGroup Condition="'$(DesignReviewHost)'=='true'">
     <AssemblyName>OpenRevo.DesignReview</AssemblyName>
     <DefineConstants>$(DefineConstants);DESIGN_REVIEW_HOST</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(PanelShapeReviewHost)'=='true'">
+    <AssemblyName>OpenRevo.PanelShapeReview</AssemblyName>
+    <DefineConstants>$(DefineConstants);DESIGN_REVIEW_HOST;PANEL_SHAPE_REVIEW_HOST</DefineConstants>
   </PropertyGroup>
   <PropertyGroup Condition="'$(OsdPowerReviewHost)'=='true'">
     <AssemblyName>OpenRevo.OsdPowerReview</AssemblyName>
@@ -50,3 +54,4 @@
     <Copy SourceFiles="$(TargetDir)App.xbf;$(TargetDir)$(AssemblyName).pri" DestinationFolder="$(PublishDir)" />
   </Target>
 </Project>
+

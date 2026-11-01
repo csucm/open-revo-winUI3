@@ -1,6 +1,24 @@
 using OpenRevo.Core;
 using OpenRevo.Core.Hal;
 using System.Text.Json;
+if(args.Length==2&&args[0]=="--native-extension-checks"){NativeExtensionChecks.Run(args[1]);return;}
+if(args.Length==2&&args[0]=="--preference-persistence-checks"){PreferencePersistenceChecks.Run(args[1]);return;}
+if(args.Length==2&&args[0]=="--update-checks"){await UpdateChecks.Run(args[1]);return;}
+if(args.Length==2&&args[0]=="--update-source-check")
+{
+    using var http=new HttpClient{Timeout=TimeSpan.FromMinutes(3)};
+    var updater=new ReleaseUpdater(http);
+    var release=await updater.CheckAsync(new Version(0,0,0))??throw new IOException("No native release found.");
+    var download=await updater.DownloadAsync(release,Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1]))!,"download"));
+    File.WriteAllText(args[1],JsonSerializer.Serialize(new{release,download.Path,installerLaunches=0},new JsonSerializerOptions{WriteIndented=true}));return;
+}
+if(args.Length==3&&args[0]=="--update-catalog-check")
+{
+    var release=ReleaseUpdater.ParseReleases(File.ReadAllText(args[1]),new Version(0,0,0))??throw new IOException("No native release found.");
+    using var http=new HttpClient{Timeout=TimeSpan.FromMinutes(3)};
+    var download=await new ReleaseUpdater(http).DownloadAsync(release,Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[2]))!,"download"));
+    File.WriteAllText(args[2],JsonSerializer.Serialize(new{release,download.Path,installerLaunches=0,catalog="GitHub authenticated read; no token in product"},new JsonSerializerOptions{WriteIndented=true}));return;
+}
 if(args.Length==2&&args[0]=="--osd-frame-checks"){OsdFrameChecks.Run(args[1]);return;}
 if(args.Length==2&&args[0]=="--responsive-layout-checks"){ResponsiveLayoutChecks.Run(args[1]);return;}
 if(args.Length==2&&args[0]=="--editor-fixes-checks"){EditorFixChecks.Run(args[1]);return;}
@@ -1053,3 +1071,4 @@ sealed class FakePower : IPowerPlans
     public IReadOnlyList<PowerPlan> List() => [new(A, "A"), new(B, "B")];
     public void Set(Guid id) { Writes++; if (!IgnoreWrites) Current = id; }
 }
+

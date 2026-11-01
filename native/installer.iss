@@ -1,13 +1,15 @@
-﻿#define AppName "Open-Revo"
+#define AppName "Open-Revo"
 #ifndef AppVersion
-#define AppVersion "0.9.6"
+#define AppVersion "0.9.7"
 #endif
 [Setup]
+SetupArchitecture=x86
 AppId={{8626505B-AD8A-45AA-B1EB-8AB75B60524A}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=Open-Revo Native Community Build
-DefaultDirName={localappdata}\Programs\OpenRevoNative
+DefaultDirName={localappdata}\Programs\OpenRevo
+UsePreviousAppDir=yes
 DefaultGroupName={#AppName}
 UsePreviousGroup=no
 PrivilegesRequired=lowest
@@ -16,12 +18,16 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.19041
 OutputDir=..
 OutputBaseFilename=Open-Revo-{#AppVersion}-Setup-x64
-SetupIconFile=src\OpenRevo.Native\App.ico
+SetupIconFile=src\Branding\App.ico
 UninstallDisplayIcon={app}\OpenRevo.Native.exe
 AppMutex=Local\OpenRevo.Native.InstalledPreview
 LicenseFile=LICENSE
 InfoBeforeFile=INSTALL-NOTES.txt
+#ifdef CompactPackage
+Compression=lzma2/ultra64
+#else
 Compression=lzma2
+#endif
 SolidCompression=yes
 WizardStyle=modern
 DisableProgramGroupPage=yes
@@ -34,6 +40,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 [Files]
+Source: "installer/InstallerFolderFilter.dll"; Flags: dontcopy
 Source: "app-{#AppVersion}-final\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "diagnostics\*,layout-review\*,*.pdb,ui-review.json,ui-caption-steps.txt,caption-error.txt,overview-layout.json,overview-core-readings.json"
 Source: "LICENSE"; DestDir: "{app}"
 Source: "INSTALL-NOTES.txt"; DestDir: "{app}"
@@ -51,6 +58,7 @@ Filename: "{app}\OpenRevo.Native.exe"; Parameters: "--startup-remove"; Verb: "ru
 [Code]
 var
   FreshInstall: Boolean;
+#include "InstallerDirectoryPicker.iss"
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   LegacyCommand: String;
@@ -72,13 +80,4 @@ begin
         MsgBox('Startup setup was not completed. Open the app and configure startup in Settings.', mbInformation, MB_OK);
   end;
 end;
-function InitializeSetup(): Boolean;
-var
-  RuntimeFolder: TFindRec;
-begin
-  Result := FindFirst(ExpandConstant('{pf64}\dotnet\shared\Microsoft.NETCore.App\10.*'), RuntimeFolder);
-  if Result then
-    FindClose(RuntimeFolder)
-  else
-    MsgBox('Microsoft .NET 10 Runtime (x64) is required. Install it from https://dotnet.microsoft.com/download/dotnet/10.0 and run this setup again.', mbError, MB_OK);
-end;
+

@@ -27,6 +27,12 @@ public partial class App : Application
 #else
         false;
 #endif
+    internal static bool IsPanelShapeReview =>
+#if PANEL_SHAPE_REVIEW_HOST
+        true;
+#else
+        false;
+#endif
     internal static bool IsCapsUiReview =>
 #if CAPS_UI_REVIEW_HOST
         true;
@@ -88,7 +94,8 @@ public partial class App : Application
         try
         {
             window = new MainWindow(command.Length==2&&command[1] is "--ui-checks" or "--ui-layout-checks" or "--ui-window-checks" or "--ui-replica-checks" or "--ui-settings-checks" or "--ui-theme-restore-checks" or "--ui-design-checks" or "--ui-camera-checks" or "--ui-brightness-checks" or "--ui-win-checks" or "--ui-gpu-checks",command.Length==2&&command[1] is "--review-details" or "--ui-window-checks" or "--ui-replica-checks" or "--ui-settings-checks" or "--ui-theme-restore-checks" or "--ui-design-checks");
-            window.Activate();if(command.Contains("--startup"))window.StartHiddenToTray();
+            if(IsPanelShapeReview)window.StartPanelShapeReview();
+            else {window.Activate();if(command.Contains("--startup"))window.StartHiddenToTray();}
         }
         catch (Exception error) { SaveFailure(error); Exit(); }
     }

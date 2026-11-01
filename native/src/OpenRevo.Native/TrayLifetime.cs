@@ -31,8 +31,8 @@ public sealed partial class MainWindow
         AddTrayIcon();
         Activated+=(_,e)=>
         {
-            if(e.WindowActivationState==WindowActivationState.Deactivated&&mini&&systemPreferences.MiniAutoHide&&!dialogOpen&&!exitRequested&&!panelMinimizeQueued&&AppWindow.IsVisible)
-                DispatcherQueue.TryEnqueue(()=>{if(mini&&!dialogOpen&&!panelMinimizeQueued)HideToTray();});
+            if(e.WindowActivationState==WindowActivationState.Deactivated&&mini&&systemPreferences.MiniAutoHide&&!dialogOpen&&!exitRequested&&!panelMinimizeQueued&&!panelShapeChanging&&AppWindow.IsVisible)
+                DispatcherQueue.TryEnqueue(()=>{if(mini&&!dialogOpen&&!panelMinimizeQueued&&!panelShapeChanging)HideToTray();});
         };
     }
     private void AddTrayIcon()
@@ -67,7 +67,7 @@ public sealed partial class MainWindow
         if(AppWindow.Presenter is OverlappedPresenter presenter&&presenter.State==OverlappedPresenterState.Minimized)presenter.Restore();
         AppWindow.Show();Activate();SetForegroundWindow(captionWindow);UpdatePolling();
     }
-    private bool RuntimeBusy=>hardwareBusy||quickBusy||requestedWinLocked.HasValue||takeoverChanging||tuningApplying||displayBusy||brightnessApplying||gpuChanging||desktopServiceBusy||sleepOfficeBusy||settingsDataBusy||settingsPowerBusy||batteryGuardBusy;
+    private bool RuntimeBusy=>updateBusy||hardwareBusy||quickBusy||requestedWinLocked.HasValue||takeoverChanging||tuningApplying||displayBusy||brightnessApplying||gpuChanging||desktopServiceBusy||sleepOfficeBusy||settingsDataBusy||settingsPowerBusy||batteryGuardBusy;
     private async Task ExitFromTray()
     {
         if(exitInProgress||closed)return;exitInProgress=true;exitRequested=true;
@@ -82,7 +82,7 @@ public sealed partial class MainWindow
                 await Task.Delay(80);
             }
             if(closed)return;if(!dataStorageExitPending)RememberPanelShape();
-            if(upstream!=null&&!desktopRuntimeClosed)await CloseDesktopRuntime();else Close();
+            if(upstream!=null&&!desktopRuntimeClosed)await CloseDesktopRuntime();else {StartPendingUpdate();Close();}
         }
         catch(Exception error){DiagnosticLog.Failure("exit.failed",error,ExitDiagnosticState());}
         finally{if(!closed){exitRequested=false;exitInProgress=false;}DiagnosticLog.Record("exit.finished",new{elapsedMs=watch.ElapsedMilliseconds,closed});}
