@@ -24,6 +24,7 @@ public sealed partial class MainWindow
     }
     private void SyncUpdateControls()
     {
+        RefreshPaintedState();
         if(updateHint!=null)updateHint.Text=updateMessage;
         if(updateCheckButton!=null)updateCheckButton.IsEnabled=!updateBusy&&!exitRequested;
         if(updateInstallButton!=null)updateInstallButton.IsEnabled=availableUpdate!=null&&!updateBusy&&!exitRequested;

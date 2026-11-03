@@ -1,8 +1,8 @@
 Open-Revo - unofficial native WinUI build (development)
 
-Includes the .NET 10 x64 runtime. Windows App Runtime 2.5+ is still required.
-No separate .NET Runtime installation is needed for this build.
-Windows App Runtime is a separate dependency.
+Requires the shared .NET 10 x64 Desktop Runtime and Windows App Runtime 2.5+.
+The installer detects .NET first and downloads the official x64 installer if needed.
+The application package no longer bundles .NET. Windows App Runtime remains separate.
 
 The console runs as administrator, as requested. Manual launch can show UAC.
 GPU selections reuse this permission and save the next-boot mode only.
@@ -51,5 +51,6 @@ Basic diagnostics include per-process startup context, full exceptions and
 bounded JSONL logs. Exports use schema 3. See DIAGNOSTICS.md in the source.
 See RELEASE-0.9.4.md for scope and verification limits.
 GPL-3.0-or-later. Complete corresponding source is included.
+
 
 

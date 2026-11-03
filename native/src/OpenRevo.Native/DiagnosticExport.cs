@@ -39,8 +39,12 @@ public sealed partial class MainWindow
             await File.WriteAllTextAsync(selected.Path,content);
             diagnosticExportLastPath=selected.Path;
             trace.Complete(new{path=selected.Path,bytes=System.Text.Encoding.UTF8.GetByteCount(content),schema=3});
+            if(UsePaintedUi){if(await PaintDialog("诊断报告已保存",Paint.Text(selected.Path),"打开所在文件夹","完成"))OpenLocalFolder(Path.GetDirectoryName(selected.Path)!);}
+            else
+            {
             var dialog=new ContentDialog{XamlRoot=root.XamlRoot,Title="诊断报告已保存",Content=Ui.Text(selected.Path,14),PrimaryButtonText="打开所在文件夹",CloseButtonText="完成",DefaultButton=ContentDialogButton.Close};
             if(await dialog.ShowAsync()==ContentDialogResult.Primary)OpenLocalFolder(Path.GetDirectoryName(selected.Path)!);
+            }
         }
         catch(Exception error){trace.Fail(error);if(!closed)await ShowMessage("诊断导出失败",error.Message);}
         finally{diagnosticExportBusy=false;}

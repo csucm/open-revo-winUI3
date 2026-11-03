@@ -10,6 +10,7 @@ public sealed partial class MainWindow
     private static FontIcon DetailIcon(string glyph,double size=20)=>new(){FontFamily=new FontFamily("Segoe Fluent Icons"),Glyph=glyph,FontSize=size};
     private static FrameworkElement DetailGlyph(string glyph,double size=20,bool accent=false)
     {
+        if(ApprovedIcons.Glyph(glyph) is string approved)return ApprovedIcons.Create(approved,size);
         string? geometry=glyph switch
         {
             "sun"=>"M16,12 A4,4 0 1 1 8,12 A4,4 0 1 1 16,12 M12,1 L12,4 M12,20 L12,23 M1,12 L4,12 M20,12 L23,12 M4,4 L6,6 M18,18 L20,20 M4,20 L6,18 M18,6 L20,4",
@@ -24,28 +25,33 @@ public sealed partial class MainWindow
     }
     private FrameworkElement DetailHeader(string title,string description,string glyph)
     {
-        FrameworkElement icon=title is "自定义调校" or "调色控制"?SemanticGraphic(title=="自定义调校"?"tuning":"color",20):PageIcon(title switch{"自定义调校"=>"tuning","调色控制"=>"color","显卡与屏幕"=>"display","电源与电池"=>"power","灯光与设备"=>"devices","设置与诊断"=>"settings","插件兼容"=>"plugins",_=>"overview"});
+        string route=customTuningOpen?"tuning":colorTuningOpen?"color":currentPage=="devices"&&selectedLightingZone!="keyboard"?"lightingzone":currentPage;
+        string graphic=title switch{"状态总览"=>"home","灯光与设备"=>"lighting",_=>"settings"};
+        if(ApprovedCopy.Pages.TryGetValue(route,out var copy)){title=copy.Title;description=copy.Subtitle;graphic=copy.Icon switch{"tuning"=>"mode-custom","color"=>"lighting",_=>copy.Icon};}
+        FrameworkElement icon=ApprovedIcons.Create(graphic,40);
         icon.HorizontalAlignment=HorizontalAlignment.Center;icon.VerticalAlignment=VerticalAlignment.Center;
         var badge=new Border{Style=(Style)Application.Current.Resources["DetailBadgeStyle"],Child=icon,VerticalAlignment=VerticalAlignment.Center};
-        var labels=Ui.Stack(Ui.Text(title,24,true),Ui.Text(description,12,muted:true));labels.Spacing=4;labels.VerticalAlignment=VerticalAlignment.Center;
-        var grid=new Grid{ColumnSpacing=14,Margin=new Thickness(0,2,0,4)};
+        var labels=Ui.Stack(Ui.Text(title,24,true),Ui.Text(description,12,muted:true));labels.Spacing=route=="overview"?11:6;labels.VerticalAlignment=VerticalAlignment.Center;
+        var grid=new Grid{ColumnSpacing=10,Margin=new Thickness(0,0,0,route=="overview"?0:6)};
         grid.ColumnDefinitions.Add(new(){Width=GridLength.Auto});grid.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});
         grid.Children.Add(badge);Grid.SetColumn(labels,1);grid.Children.Add(labels);grid.Tag=new DesktopAlignment(badge,labels,"page-header");return grid;
     }
     private Border DetailSection(string title,UIElement content,string? description=null,FrameworkElement? trailing=null)
     {
         detailSectionTitles.Add(title);
-        var heading=Ui.Text(title,15,true);
+        var heading=SettingsControls(ApprovedIcons.Create(SectionIcon(title),34),Ui.Text(title,16,true));
         FrameworkElement header=trailing==null?heading:DesktopAlignedRow(heading,trailing,"section-heading");
         var stack=Ui.Stack(header);stack.Spacing=12;
         if(!string.IsNullOrEmpty(description))stack.Children.Add(Ui.Text(description,12,muted:true));
         stack.Children.Add(content);
-        var card=Ui.Card(stack);card.Padding=new Thickness(18);return card;
+        var card=Ui.Card(stack);card.Padding=new Thickness(20);
+        string? key=title.Contains("显卡")?"gpu":title.Contains("亮度")?"brightness":title.Contains("电池")?"battery":title.Contains("灯光")||title.Contains("背光")?"lighting":null;
+        return key==null?card:PanelAnchor(key,card);
     }
     private static DesktopTiles DetailGrid(params FrameworkElement[] items)=>DetailGridWithColumns(2,items);
     private static DesktopTiles DetailGridWithColumns(int preferredColumns,params FrameworkElement[] items)
     {
-        var grid=new DesktopTiles{PreferredColumns=preferredColumns,MinimumItemWidth=preferredColumns==3?200:312,ColumnSpacing=16,RowSpacing=8};
+        var grid=new DesktopTiles{PreferredColumns=preferredColumns,MinimumItemWidth=0,ViewportBreakpoint=960,ColumnSpacing=16,RowSpacing=16};
         foreach(var item in items){item.HorizontalAlignment=HorizontalAlignment.Stretch;item.VerticalAlignment=VerticalAlignment.Stretch;grid.Children.Add(item);}return grid;
     }
     private static void SetChoiceVisual(Button button,bool selected)
@@ -66,16 +72,14 @@ public sealed partial class MainWindow
     }
     private static FrameworkElement DetailRow(string glyph,string title,string description,FrameworkElement control,double stackBelow=520,TextBlock? status=null)
     {
-        var titleText=Ui.Text(title,13,true);
-        var labels=Ui.Stack(titleText,Ui.Text(description,12,muted:true));if(status!=null)labels.Children.Add(status);labels.Spacing=3;labels.VerticalAlignment=VerticalAlignment.Center;
-        var leading=new Grid{ColumnSpacing=12,VerticalAlignment=VerticalAlignment.Center};leading.ColumnDefinitions.Add(new(){Width=new GridLength(26)});leading.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});
-        var icon=DetailGlyph(glyph,18);icon.VerticalAlignment=VerticalAlignment.Center;icon.HorizontalAlignment=HorizontalAlignment.Center;
-        leading.Children.Add(icon);Grid.SetColumn(labels,1);leading.Children.Add(labels);leading.Tag=new DesktopAlignment(icon,labels,"row-icon");
+        var titleText=Ui.Text(title,14);
+        var labels=SuiteVisuals.Stack(4,titleText);if(!string.IsNullOrWhiteSpace(description))labels.Children.Add(Ui.Text(description,12,muted:true));if(status!=null)labels.Children.Add(status);labels.VerticalAlignment=VerticalAlignment.Center;
+        FrameworkElement leading=labels;
         control.VerticalAlignment=VerticalAlignment.Center;
-        var row=DesktopAlignedRow(leading,control);row.MinHeight=56;bool stacked=false;
+        var row=DesktopAlignedRow(leading,control);row.MinHeight=40;bool stacked=false;
         row.SizeChanged+=(_,_)=>
         {
-            bool narrow=row.ActualWidth>0&&row.ActualWidth<stackBelow;
+            bool narrow=row.ActualWidth>0&&row.ActualWidth<Math.Min(360,stackBelow);
             if(stacked==narrow)return;stacked=narrow;
             row.Tag=narrow?null:new DesktopAlignment(leading,control,"label-control");
             row.RowDefinitions.Clear();row.RowDefinitions.Add(new(){Height=GridLength.Auto});
@@ -95,4 +99,5 @@ public sealed partial class MainWindow
         if(tuningReturnMini&&!mini)ToggleMini();else Render();
     }
 }
+
 

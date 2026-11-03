@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml;
@@ -47,6 +47,7 @@ public sealed partial class MainWindow
         if(captionModeAttached&&captionWindowProc!=null)RemoveWindowSubclass(captionWindow,captionWindowProc,CaptionModeSubclassId);
         captionModeAttached=false;
     }
+    private void ResetCaptionHover(){CloseCaptionExpandTip();CaptionHoverState.Clear(captionWindow);}
     private void CloseCaptionExpandTip()
     {
         captionMaxHovered=false;
@@ -83,7 +84,7 @@ public sealed partial class MainWindow
         if(closed||exitRequested||sessionEnding)return false;
         if(panelMinimizeQueued||panelShapeChanging)return true;
         bool fromMini=mini;panelMinimizeQueued=true;
-        if(DispatcherQueue.TryEnqueue(()=>
+        if(DispatcherQueue.TryEnqueue(async ()=>
         {
             try
             {
@@ -92,7 +93,9 @@ public sealed partial class MainWindow
                 if(!fromMini)
                 {
                     if(!mini)ToggleMini();
-                    trayHidden=false;AppWindow.Show();Activate();SetForegroundWindow(captionWindow);
+                    await panelShapeCompletion;
+                    if(closed||exitRequested||sessionEnding)return;
+                    trayHidden=false;ResetCaptionHover();AppWindow.Show();Activate();SetForegroundWindow(captionWindow);
                     RememberPanelShape();UpdatePolling();
                 }
                 else if(mini)HideToTray();
@@ -156,3 +159,4 @@ public sealed partial class MainWindow
         return DefSubclassProc(hwnd,message,wParam,lParam);
     }
 }
+

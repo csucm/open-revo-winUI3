@@ -1,12 +1,22 @@
 #define AppName "Open-Revo"
 #ifndef AppVersion
-#define AppVersion "0.9.7"
+#define AppVersion "0.9.8"
+#endif
+#ifndef AppPayloadDir
+#define AppPayloadDir "app-" + AppVersion + "-shared"
+#endif
+#ifndef SourceZipName
+#define SourceZipName "native-source-" + AppVersion + "-shared.zip"
+#endif
+#ifndef OutputName
+#define OutputName "Open-Revo-" + AppVersion + "-Shared-Setup-x64"
 #endif
 [Setup]
 SetupArchitecture=x86
 AppId={{8626505B-AD8A-45AA-B1EB-8AB75B60524A}
 AppName={#AppName}
 AppVersion={#AppVersion}
+VersionInfoVersion={#AppVersion}.0
 AppPublisher=Open-Revo Native Community Build
 DefaultDirName={localappdata}\Programs\OpenRevo
 UsePreviousAppDir=yes
@@ -17,7 +27,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.19041
 OutputDir=..
-OutputBaseFilename=Open-Revo-{#AppVersion}-Setup-x64
+OutputBaseFilename={#OutputName}
 SetupIconFile=src\Branding\App.ico
 UninstallDisplayIcon={app}\OpenRevo.Native.exe
 AppMutex=Local\OpenRevo.Native.InstalledPreview
@@ -41,15 +51,15 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 [Files]
 Source: "installer/InstallerFolderFilter.dll"; Flags: dontcopy
-Source: "app-{#AppVersion}-final\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "diagnostics\*,layout-review\*,*.pdb,ui-review.json,ui-caption-steps.txt,caption-error.txt,overview-layout.json,overview-core-readings.json"
+Source: "{#AppPayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "diagnostics\*,layout-review\*,*.pdb,ui-review.json,ui-caption-steps.txt,caption-error.txt,overview-layout.json,overview-core-readings.json"
 Source: "LICENSE"; DestDir: "{app}"
 Source: "INSTALL-NOTES.txt"; DestDir: "{app}"
-Source: "native-source-{#AppVersion}.zip"; DestDir: "{app}\source"; DestName: "native-source.zip"
+Source: "{#SourceZipName}"; DestDir: "{app}\source"; DestName: "native-source.zip"
 Source: "RELEASE-{#AppVersion}.md"; DestDir: "{app}"
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\OpenRevo.Native.exe"
+Name: "{group}\{#AppName}"; Filename: "{app}\OpenRevo.Native.exe"; IconFilename: "{app}\App.ico"; AppUserModelID: "OpenRevo.Native.ControlPanel"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\OpenRevo.Native.exe"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\OpenRevo.Native.exe"; IconFilename: "{app}\App.ico"; AppUserModelID: "OpenRevo.Native.ControlPanel"; Tasks: desktopicon
 [Run]
 Filename: "{app}\OpenRevo.Native.exe"; Description: "Launch {#AppName}"; Verb: "runas"; Flags: shellexec nowait postinstall skipifsilent unchecked
 [UninstallRun]
@@ -58,6 +68,8 @@ Filename: "{app}\OpenRevo.Native.exe"; Parameters: "--startup-remove"; Verb: "ru
 [Code]
 var
   FreshInstall: Boolean;
+#define WithRuntimePrerequisite
+#include "RuntimePrerequisite.iss"
 #include "InstallerDirectoryPicker.iss"
 procedure CurStepChanged(CurStep: TSetupStep);
 var
@@ -80,4 +92,7 @@ begin
         MsgBox('Startup setup was not completed. Open the app and configure startup in Settings.', mbInformation, MB_OK);
   end;
 end;
+
+
+
 

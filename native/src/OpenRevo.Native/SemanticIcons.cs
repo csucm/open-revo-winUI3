@@ -27,11 +27,7 @@ public sealed partial class MainWindow
     };
     private static FrameworkElement SemanticGraphic(string key,double size=22)
     {
-        if(key is "overview" or "display" or "power" or "devices" or "plugins" or "settings")
-        {var icon=PageIcon(key);icon.Width=size;icon.Height=size;return icon;}
-        string optical=key=="gpu"?"<Path.RenderTransform><TranslateTransform Y='-2'/></Path.RenderTransform>":"";
-        var element=(FrameworkElement)Microsoft.UI.Xaml.Markup.XamlReader.Load($"<Viewbox xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Width='{size}' Height='{size}'><Canvas Width='24' Height='24'><Path Data='{SemanticPath(key)}' Stroke='{{ThemeResource {SemanticBrush(key)}}}' StrokeThickness='1.8' StrokeLineJoin='Round' StrokeStartLineCap='Round' StrokeEndLineCap='Round'>{optical}</Path></Canvas></Viewbox>");
-        return element;
+        return ApprovedIcons.Create(key switch{"overview"=>"home","devices"=>"lighting","tuning"=>"mode-custom","color"=>"lighting","leaf"=>"mode-office","flame"=>"mode-performance","rocket"=>"mode-custom","zap"=>"mode-balanced","star"=>"lighting",_=>key},size);
     }
     private static ImageIcon NavigationOriginalIcon(string id)
     {

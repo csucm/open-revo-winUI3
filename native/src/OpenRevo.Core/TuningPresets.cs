@@ -48,6 +48,19 @@ public sealed class TuningPresetStore
         }
         return result.Values.ToArray();
     }
+    public TuningPreset LoadForApply(string id,TuningPreset[] builtins,TuningSnapshot state)
+    {
+        string file=FileFor(id);TuningPreset preset;
+        if(File.Exists(file))
+        {
+            if(new FileInfo(file).Length>1024*1024)throw new IOException("方案文件过大。");
+            preset=JsonSerializer.Deserialize<TuningPreset>(File.ReadAllText(file),json)??throw new IOException("方案内容为空。");
+            if(preset.Id!=id)throw new IOException("方案标识不一致。");
+        }
+        else preset=builtins.FirstOrDefault(p=>p.Id==id)??throw new IOException("已保存方案不存在。");
+        Shape(preset.Profile);HardwareSession.ValidateTuning(state,preset.Profile);ValidName(preset.Name);
+        return preset with{Profile=preset.Profile.Copy()};
+    }
     public TuningPreset Duplicate(TuningPreset source,string name,TuningSnapshot state)
     {var p=source with{Id="user_"+Guid.NewGuid().ToString("N"),Name=ValidName(name),BuiltIn=false,Profile=source.Profile.Copy()};Save(p,state);return p;}
     public void Delete(TuningPreset preset)

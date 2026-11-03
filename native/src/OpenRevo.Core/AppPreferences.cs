@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace OpenRevo.Core;
 
-public sealed record AppPreferences(int Theme = 1, int SampleSeconds = 2, bool StartMini = true, bool LowRefreshOnBattery = false, int RequestedGpu = 0, long GpuSavedAtUnix = 0,bool OsdEnabled=true);
+public sealed record AppPreferences(int Theme = 1, int SampleSeconds = 2, bool StartMini = true, bool LowRefreshOnBattery = false, int RequestedGpu = 0, long GpuSavedAtUnix = 0,bool OsdEnabled=true,string? SelectedTuningPreset=null);
 
 public static class AppData
 {
@@ -10,7 +10,7 @@ public static class AppData
     public static string LocationPointer=>DefaultDirectoryPath+".location.json";
     private static readonly Lazy<string> resolvedDirectory=new(ResolveDirectory);
     public static string DirectoryPath=>resolvedDirectory.Value;
-    public static bool IsIsolatedReviewData=>(System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name is "OpenRevo.DesignReview" or "OpenRevo.OsdPowerReview"||Environment.GetCommandLineArgs().Any(a=>a is "--ui-settings-checks" or "--ui-theme-restore-checks" or "--ui-design-checks"))&&Environment.GetEnvironmentVariable("OPENREVO_NATIVE_TEST_DATA_DIR") is string path&&Path.IsPathFullyQualified(path)&&File.Exists(Path.Combine(path,"openrevo-native-data.json"));
+    public static bool IsIsolatedReviewData=>(System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name is "OpenRevo.DesignReview" or "OpenRevo.OsdPowerReview"||Environment.GetCommandLineArgs().Any(a=>a is "--ui-settings-checks" or "--ui-theme-restore-checks" or "--ui-design-checks" or "--approved-ui-review" or "--painted-ui-review"))&&Environment.GetEnvironmentVariable("OPENREVO_NATIVE_TEST_DATA_DIR") is string path&&Path.IsPathFullyQualified(path)&&File.Exists(Path.Combine(path,"openrevo-native-data.json"));
     private static string ResolveDirectory()
     {
         try

@@ -27,6 +27,11 @@ end;
 
 procedure InitializeWizard();
 begin
+#ifdef WithRuntimePrerequisite
+  InitializeRuntimePrerequisite();
+#endif
   OriginalDirectoryBrowse := WizardForm.DirBrowseButton.OnClick;
   WizardForm.DirBrowseButton.OnClick := @BrowseVisibleInstallDirectory;
 end;
+
+

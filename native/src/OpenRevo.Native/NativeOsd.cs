@@ -5,7 +5,6 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
-using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Foundation;
 using Windows.Graphics;
 using Windows.UI;
@@ -27,11 +26,11 @@ internal sealed record OsdMessage(string Text,string Icon,string Accent,string? 
             "touchpad"=>new("触控板 "+(on?"开启":"禁用"),"touchpad",on?blue:red,on?"on":"off"),
             "camera"=>new("摄像头 "+(on?"开启":"关闭"),"camera",on?green:red,on?"on":"off"),
             "mic"=>new("麦克风 "+(on?"开启":"静音"),"mic",on?green:red,on?"on":"off"),
-            "win_key"=>new("Win键 "+(on?"锁定":"解锁"),"lock",on?"#F59E0B":green,on?"off":"on"),
-            "fn_lock"=>new("Fn键 "+(on?"锁定":"解锁"),"fn",on?purple:neutral,on?"on":"neutral"),
+            "win_key"=>new("Win键 "+(on?"锁定":"解锁"),"lock",on?"#EFA6C5":neutral,on?"off":"on"),
+            "fn_lock"=>new("Fn键 "+(on?"锁定":"解锁"),"fn",on?"#B7A9FF":neutral,on?"on":"neutral"),
             "caps_lock"=>new(on?"Caps已锁定":"Caps已解锁","caps",on?blue:neutral,on?"on":"neutral"),
             "keep_awake"=>new("防休眠 "+(on?"开启":"关闭"),"awake",on?blue:neutral,on?"on":"neutral"),
-            "keyboard_brightness" when int.TryParse(value,out int level)&&level is >=0 and <=4=>new(level==0?"键盘背光 关闭":$"键盘背光 {level*25}%","keyboard",blue,Steps:level),
+            "keyboard_brightness" when int.TryParse(value,out int level)&&level is >=0 and <=4=>new(level==0?"关闭背光":"背光开启","keyboard",blue,Steps:level),
             _=>new(feature+" "+value,"balance",blue)
         };
     }
@@ -40,28 +39,38 @@ internal sealed record OsdMessage(string Text,string Icon,string Accent,string? 
 /// <summary>Compact native OSD: alpha/desktop acrylic, no activation or input capture.</summary>
 internal sealed class NativeOsd:IDisposable
 {
-    private readonly Window window=new();
+    private readonly Window window;
     private readonly Grid root=new(),cardContent=new();
     private readonly Border frame=new();
-    private readonly DispatcherQueueTimer holdTimer,exitTimer;
+    private readonly DispatcherQueueTimer holdTimer,opacityTimer;
+    private readonly System.Diagnostics.Stopwatch opacityClock=new();
+    private int presentationGeneration;
+    private byte currentOpacity,targetOpacity;
+    private byte animationFrom,animationTo;
+    private int opacityDuration;
+    private bool leavingOpacity;
     private readonly nint hwnd;
     private readonly Subclass callback;
-    private readonly TranslateTransform offset=new();
     private OpenRevo.Core.SystemPreferences preferences=new();
-    private string appliedTheme="";
+    internal bool CapsuleRegionApplied{get;private set;}
+    internal bool WindowTranslucencyApplied{get;private set;}
     private bool disposed;
-    private Storyboard? animation;
     private TextBlock? label;
     private Border? iconBadge;
     private bool originalIconLoaded;
     private string originalAsset="",iconFailure="";
-    private OsdGlassBackdrop? glass;
     private object? frameDiagnostics;
     private string lastFrameSignature="";
     private readonly bool reviewOsdWindow;
     private readonly bool frameHookAttached;
-    internal object Diagnostics=>new{Theme,preferences.OsdScale,preferences.OsdPosition,frame=frameDiagnostics,layout=LayoutReport};
+    internal object Diagnostics=>new{Theme,preferences.OsdScale,preferences.OsdPosition,frame=frameDiagnostics,layout=LayoutReport,CapsuleRegionApplied};
     internal OsdMessage Message{get;private set;}=new("Open-Revo · 屏幕提示预览","balance","#38BDF8");
+    internal byte WindowOpacity
+    {
+        get=>GetLayeredWindowAttributes(hwnd,out _,out byte alpha,out _)?alpha:(byte)255;
+    }
+    internal float CardOpacity=>frame.IsLoaded
+        ?Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(frame).Opacity:1;
     public bool IsVisible=>!disposed&&window.AppWindow.IsVisible;
     public FrameworkElement Surface=>root;
     public bool DoesNotActivate=>(GetWindowLongPtr(hwnd,-20)&0x08000000)!=0;
@@ -76,35 +85,55 @@ internal sealed class NativeOsd:IDisposable
     internal bool IconFits=>iconBadge!=null&&iconBadge.TransformToVisual(frame).TransformPoint(new Point()).Y>=frame.Padding.Top-1&&iconBadge.TransformToVisual(frame).TransformPoint(new Point()).Y+iconBadge.ActualHeight<=frame.ActualHeight-frame.Padding.Bottom+1;
     internal bool OriginalIconLoaded=>originalIconLoaded;
     internal double CardHeight=>frame.ActualHeight;
-    internal bool BackdropClipped=>glass?.Clipped??true;
+    internal bool BackdropClipped=>CapsuleRegionApplied;
     internal object LayoutReport
     {
-        get{GetClientRect(hwnd,out var client);return new{outerWidth=window.AppWindow.Size.Width,outerHeight=window.AppWindow.Size.Height,clientWidth=client.Right-client.Left,clientHeight=client.Bottom-client.Top,frameHookAttached,NativeFrameBorderless,root.ActualWidth,root.ActualHeight,desiredWidth=root.DesiredSize.Width,desiredHeight=root.DesiredSize.Height,dpi=GetDpiForWindow(hwnd),raster=root.XamlRoot?.RasterizationScale,textRight=label?.TransformToVisual(root).TransformPoint(new Point()).X+label?.ActualWidth,rightPadding=frame.Padding.Right,TextFits,IconFits,originalAsset,originalIconLoaded,iconFailure,glassClipped=glass?.Clipped,glassError=glass?.Error};}
+        get{GetClientRect(hwnd,out var client);return new{outerWidth=window.AppWindow.Size.Width,outerHeight=window.AppWindow.Size.Height,clientWidth=client.Right-client.Left,clientHeight=client.Bottom-client.Top,frameHookAttached,NativeFrameBorderless,root.ActualWidth,root.ActualHeight,desiredWidth=root.DesiredSize.Width,desiredHeight=root.DesiredSize.Height,dpi=GetDpiForWindow(hwnd),raster=root.XamlRoot?.RasterizationScale,textRight=label?.TransformToVisual(root).TransformPoint(new Point()).X+label?.ActualWidth,rightPadding=frame.Padding.Right,TextFits,IconFits,originalAsset,originalIconLoaded,iconFailure};}
     }
     public NativeOsd(DispatcherQueue dispatcher,string windowTitle="Open-Revo OSD",bool reviewWindow=false)
     {
+        OpenRevo.Core.DiagnosticLog.Record("osd.create.started");
+        window=new Window();
         reviewOsdWindow=reviewWindow;
         window.Title=windowTitle;window.Content=root;
-        root.Background=new SolidColorBrush(Microsoft.UI.Colors.Transparent);root.Padding=new Thickness(12);root.Children.Add(frame);frame.Child=cardContent;frame.RenderTransform=offset;
+        root.Background=new SolidColorBrush(Microsoft.UI.Colors.Transparent);root.Padding=new Thickness(12);root.Children.Add(frame);frame.Child=cardContent;
         frame.HorizontalAlignment=HorizontalAlignment.Left;frame.VerticalAlignment=VerticalAlignment.Top;
-        frame.SizeChanged+=(_,_)=>UpdateBackdropClip();root.SizeChanged+=(_,_)=>UpdateBackdropClip();root.Loaded+=(_,_)=>UpdateBackdropClip();
         var presenter=OverlappedPresenter.Create();presenter.SetBorderAndTitleBar(false,false);presenter.IsAlwaysOnTop=true;presenter.IsResizable=false;presenter.IsMinimizable=false;presenter.IsMaximizable=false;
         window.AppWindow.SetPresenter(presenter);window.AppWindow.IsShownInSwitchers=reviewWindow;
         hwnd=WinRT.Interop.WindowNative.GetWindowHandle(window);
         callback=WindowMessage;frameHookAttached=SetWindowSubclass(hwnd,callback,0x4F5344,0);
         if(!frameHookAttached)OpenRevo.Core.DiagnosticLog.Failure("osd.frame_hook.failed",new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()));
+        OpenRevo.Core.DiagnosticLog.Record("osd.create.frame");
         ApplyNativeFrame();
         holdTimer=dispatcher.CreateTimer();holdTimer.Interval=TimeSpan.FromMilliseconds(1600);holdTimer.IsRepeating=false;holdTimer.Tick+=(_,_)=>StartExit();
-        exitTimer=dispatcher.CreateTimer();exitTimer.Interval=TimeSpan.FromMilliseconds(220);exitTimer.IsRepeating=false;exitTimer.Tick+=(_,_)=>Hide();
+        opacityTimer=dispatcher.CreateTimer();
+        opacityTimer.Interval=TimeSpan.FromMilliseconds(16);
+        opacityTimer.IsRepeating=true;
+        opacityTimer.Tick+=(_,_)=>TickOpacity();
         Configure(preferences);
     }
-    public void Configure(OpenRevo.Core.SystemPreferences config)
+    public void Configure(OpenRevo.Core.SystemPreferences config)=>preferences=config;
+
+    private void ApplyOsdRegion(double dpi,int width,int height)
     {
-        preferences=config;
-        if(appliedTheme==config.OsdTheme)return;
-        appliedTheme=config.OsdTheme;
-        glass=config.OsdTheme=="pill"?new OsdGlassBackdrop():null;
-        window.SystemBackdrop=glass is{} material?material:new OsdTransparentBackdrop();PrepareAlpha();
+        CapsuleRegionApplied=false;
+        WindowTranslucencyApplied=false;
+        const int layered=0x80000;
+        nint style=GetWindowLongPtr(hwnd,-20);
+        if((style&layered)==0)SetWindowLongPtr(hwnd,-20,style|layered);
+        byte opacity=Theme switch{"pill"=>213,"fade"=>214,_=>226};
+        targetOpacity=opacity;
+        WindowTranslucencyApplied=SetLayeredWindowAttributes(hwnd,0,currentOpacity,2);
+        int left=(int)Math.Round(root.Padding.Left*dpi);
+        int top=(int)Math.Round(root.Padding.Top*dpi);
+        int right=Math.Min(width,left+(int)Math.Floor(frame.DesiredSize.Width*dpi));
+        int bottom=Math.Min(height,top+(int)Math.Floor(frame.DesiredSize.Height*dpi));
+        int diameter=Math.Min(bottom-top,(int)Math.Round(frame.CornerRadius.TopLeft*2*dpi));
+        nint region=CreateRoundRectRgn(left+1,top+1,right-1,bottom-1,Math.Max(1,diameter-2),Math.Max(1,diameter-2));
+        if(region==0)return;
+        // Windows owns the region once SetWindowRgn succeeds.
+        CapsuleRegionApplied=SetWindowRgn(hwnd,region,true)!=0;
+        if(!CapsuleRegionApplied)DeleteObject(region);
     }
     private void ApplyNativeFrame()
     {
@@ -123,7 +152,13 @@ internal sealed class NativeOsd:IDisposable
     public void ShowFeature(string feature,string value)=>Show(OsdMessage.FromFeature(feature,value));
     internal void Show(OsdMessage message)
     {
-        if(disposed)return;holdTimer.Stop();exitTimer.Stop();animation?.Stop();frame.Opacity=1;offset.Y=0;Message=message;
+        if(disposed)return;
+        bool fresh=!window.AppWindow.IsVisible;
+        int generation=++presentationGeneration;
+        holdTimer.Stop();
+        opacityTimer.Stop();
+        if(fresh)currentOpacity=0;
+        Message=message;
         BuildContent(message);
         double dpi=root.XamlRoot?.RasterizationScale??GetDpiForWindow(hwnd)/96d;if(dpi<=0)dpi=1;
         root.Measure(new Size(double.PositiveInfinity,double.PositiveInfinity));
@@ -138,24 +173,40 @@ internal sealed class NativeOsd:IDisposable
         int y=preferences.OsdPosition=="center"?area.Y+(area.Height-height)/2:preferences.OsdPosition=="bottom-center"?area.Y+area.Height-height-(int)Math.Round(24*dpi):area.Y+(int)Math.Round(4*dpi);
         x=Math.Clamp(x,area.X,area.X+area.Width-width);y=Math.Clamp(y,area.Y,area.Y+area.Height-height);
         window.AppWindow.MoveAndResize(new RectInt32(x,y,Math.Max(1,width),Math.Max(1,height)));
-        SetWindowRgn(hwnd,0,true);
-        ApplyNativeFrame();window.AppWindow.Show(false);ApplyNativeFrame();root.UpdateLayout();UpdateBackdropClip();Animate(false);holdTimer.Start();
-        OpenRevo.Core.DiagnosticLog.Record("osd.presentation",new{Theme,preferences.OsdScale,preferences.OsdPosition,layout=LayoutReport});
+        if(fresh)ApplyNativeFrame();
+        ApplyOsdRegion(dpi,width,height);
+        // Paint the complete card at zero window opacity before revealing it.
+        // Fading XAML alone exposed the opaque backing surface between frames.
+        MotionDesign.Reset(frame);
+        if(fresh)
+        {
+            window.AppWindow.Show(false);
+            _=RevealAfterCommit(generation);
+        }
+        else StartOpacity(false);
+        OpenRevo.Core.DiagnosticLog.Record("osd.presentation",new{Theme,preferences.OsdScale,preferences.OsdPosition,message=message.Icon});
     }
     private void BuildContent(OsdMessage message)
     {
         double s=preferences.OsdScale/100d;bool pill=Theme=="pill",fade=Theme=="fade";
         cardContent.Children.Clear();cardContent.ColumnDefinitions.Clear();cardContent.ColumnSpacing=(pill?10:12)*s;
         cardContent.ColumnDefinitions.Add(new(){Width=GridLength.Auto});cardContent.ColumnDefinitions.Add(new(){Width=GridLength.Auto});
-        frame.Padding=pill?new Thickness(10*s,6*s,(Preview?24:18)*s,6*s):fade?new Thickness(14*s,6*s,28*s,6*s):new Thickness(0,6*s,(Preview?4:0)*s,6*s);
-        frame.CornerRadius=new CornerRadius(pill?22*s:fade?4*s:0);frame.BorderThickness=pill?new Thickness(s):fade?new Thickness(3.5*s,0,0,0):new Thickness(0);
-        frame.BorderBrush=Brush(pill?"#29FFFFFF":message.Accent);
+        frame.Padding=pill?new Thickness(10*s,6*s,(Preview?24:18)*s,6*s):fade?new Thickness(14*s,6*s,28*s,6*s):new Thickness(8*s,6*s,(Preview?12:8)*s,6*s);
+        frame.CornerRadius=new CornerRadius(pill?22*s:fade?4*s:6*s);frame.BorderThickness=fade?new Thickness(3.5*s,0,0,0):new Thickness(0);
+        frame.BorderBrush=Brush(message.Accent);
         if(fade)
         {
             var gradient=new LinearGradientBrush{StartPoint=new Point(0,0),EndPoint=new Point(1,0)};
-            gradient.GradientStops.Add(new(){Color=Color(166,"#0F172A"),Offset=0});gradient.GradientStops.Add(new(){Color=Color(64,"#0F172A"),Offset=.75});gradient.GradientStops.Add(new(){Color=Color(0,"#0F172A"),Offset=1});frame.Background=gradient;
+            gradient.GradientStops.Add(new(){Color=Parse("#1F2F46"),Offset=0});gradient.GradientStops.Add(new(){Color=Parse("#344459"),Offset=.75});gradient.GradientStops.Add(new(){Color=Parse("#49586C"),Offset=1});frame.Background=gradient;
         }
-        else frame.Background=new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        else if(pill)
+        {
+            var glassFill=new LinearGradientBrush{StartPoint=new Point(0,0),EndPoint=new Point(0,1)};
+            glassFill.GradientStops.Add(new(){Color=Parse("#3C4C63"),Offset=0});
+            glassFill.GradientStops.Add(new(){Color=Parse("#233146"),Offset=1});
+            frame.Background=glassFill;
+        }
+        else frame.Background=Brush("#182232");
         double badgeSize=(pill?30:32)*s;
         var badge=iconBadge=new Border{Width=badgeSize,Height=badgeSize,CornerRadius=new CornerRadius(pill?badgeSize/2:0),VerticalAlignment=VerticalAlignment.Center,
             Background=new SolidColorBrush(Color(pill?(byte)38:(byte)0,message.Accent)),BorderBrush=new SolidColorBrush(Color(89,message.Accent)),BorderThickness=new Thickness(pill?s:0),Child=OsdIcon(message.Icon,message.Accent,22*s)};
@@ -180,24 +231,89 @@ internal sealed class NativeOsd:IDisposable
         }
         Grid.SetColumn(body,1);cardContent.Children.Add(body);
     }
-    private void Animate(bool leaving)
+    private async Task RevealAfterCommit(int generation)
     {
-        glass?.Animate(leaving,Design.MotionEnabled,preferences.OsdScale/100d,root.XamlRoot?.RasterizationScale??1);
-        animation?.Stop();frame.Opacity=leaving?1:0;offset.Y=leaving?0:-8*preferences.OsdScale/100d;
-        if(!Design.MotionEnabled){frame.Opacity=leaving?0:1;offset.Y=0;return;}
-        var fade=new DoubleAnimation{From=leaving?1:0,To=leaving?0:1,Duration=TimeSpan.FromMilliseconds(220),EasingFunction=new CubicEase{EasingMode=EasingMode.EaseOut}};
-        var slide=new DoubleAnimation{From=offset.Y,To=leaving?-8*preferences.OsdScale/100d:0,Duration=TimeSpan.FromMilliseconds(220),EasingFunction=new CubicEase{EasingMode=EasingMode.EaseOut},EnableDependentAnimation=true};
-        Storyboard.SetTarget(fade,frame);Storyboard.SetTargetProperty(fade,"Opacity");Storyboard.SetTarget(slide,offset);Storyboard.SetTargetProperty(slide,"Y");
-        animation=new Storyboard();animation.Children.Add(fade);animation.Children.Add(slide);animation.Begin();
+        try
+        {
+            root.UpdateLayout();
+            var visual=Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(root);
+            await visual.Compositor.RequestCommitAsync();
+            // Let DWM consume the first committed card while the HWND is invisible.
+            await Task.Delay(32);
+            if(disposed||generation!=presentationGeneration)return;
+            MotionDesign.Reset(frame);
+            StartOpacity(false);
+        }
+        catch(Exception error)
+        {
+            OpenRevo.Core.DiagnosticLog.Failure("osd.reveal.failed",error);
+            if(!disposed&&generation==presentationGeneration)Hide();
+        }
     }
-    private void StartExit(){if(disposed)return;Animate(true);if(Design.MotionEnabled)exitTimer.Start();else Hide();}
-    internal void HoldForReview(){holdTimer.Stop();exitTimer.Stop();animation?.Stop();frame.Opacity=1;offset.Y=0;glass?.Hold();}
-    public void Hide(){if(disposed)return;holdTimer.Stop();exitTimer.Stop();animation?.Stop();window.AppWindow.Hide();}
-    public void Dispose(){if(disposed)return;Hide();disposed=true;if(frameHookAttached)RemoveWindowSubclass(hwnd,callback,0x4F5344);window.Close();}
-    private void PrepareAlpha()
+    private void SetOpacity(byte opacity)
     {
-        var margins=new Margins();DwmExtendFrameIntoClientArea(hwnd,ref margins);nint region=CreateRectRgn(0,0,0,0);
-        var blur=new Blur{Flags=3,Enable=true,Region=region};DwmEnableBlurBehindWindow(hwnd,ref blur);DeleteObject(region);
+        if(SetLayeredWindowAttributes(hwnd,0,opacity,2))
+            currentOpacity=opacity;
+    }
+    private void StartOpacity(bool leaving)
+    {
+        opacityTimer.Stop();
+        leavingOpacity=leaving;
+        animationFrom=currentOpacity;
+        animationTo=leaving?(byte)0:targetOpacity;
+        opacityDuration=MotionDesign.Duration(leaving?150:180);
+        if(!Design.MotionEnabled||animationFrom==animationTo)
+        {
+            SetOpacity(animationTo);
+            FinishOpacity();
+            return;
+        }
+        opacityClock.Restart();
+        opacityTimer.Start();
+    }
+    private void TickOpacity()
+    {
+        if(disposed){opacityTimer.Stop();return;}
+        double t=Math.Clamp(opacityClock.Elapsed.TotalMilliseconds/opacityDuration,0,1);
+        double eased=leavingOpacity?t*t:1-Math.Pow(1-t,3);
+        SetOpacity((byte)Math.Round(animationFrom+(animationTo-animationFrom)*eased));
+        if(t>=1){opacityTimer.Stop();FinishOpacity();}
+    }
+    private void FinishOpacity()
+    {
+        if(leavingOpacity)Hide();
+        else holdTimer.Start();
+    }
+    private void StartExit()
+    {
+        if(disposed)return;
+        StartOpacity(true);
+    }
+    internal void HoldForReview()
+    {
+        ++presentationGeneration;
+        holdTimer.Stop();
+        opacityTimer.Stop();
+        MotionDesign.Reset(frame);
+        SetOpacity(targetOpacity);
+    }
+    public void Hide()
+    {
+        if(disposed)return;
+        ++presentationGeneration;
+        holdTimer.Stop();
+        opacityTimer.Stop();
+        SetOpacity(0);
+        window.AppWindow.Hide();
+        MotionDesign.Reset(frame);
+    }
+    public void Dispose()
+    {
+        if(disposed)return;
+        Hide();
+        disposed=true;
+        if(frameHookAttached)RemoveWindowSubclass(hwnd,callback,0x4F5344);
+        window.Close();
     }
     private nint WindowMessage(nint window,uint message,nuint wp,nint lp,nuint id,nuint data)
     {
@@ -210,14 +326,7 @@ internal sealed class NativeOsd:IDisposable
         if(message==OsdFramePolicy.CalculateClient)return 0;
         if(message==0x84)return -1;if(message==0x21)return 3;
         if(message==0x14&&GetClientRect(window,out var rect)){FillRect((nint)wp,ref rect,GetStockObject(4));return 1;}
-        if(message==0x31E)PrepareAlpha();return DefSubclassProc(window,message,wp,lp);
-    }
-    private void UpdateBackdropClip()
-    {
-        if(disposed||glass==null||frame.ActualWidth<=0||frame.ActualHeight<=0)return;
-        double dpi=root.XamlRoot?.RasterizationScale??1;
-        glass.UpdateClip((float)(root.ActualWidth*dpi),(float)(root.ActualHeight*dpi),(float)(12*dpi),(float)(12*dpi),(float)(frame.ActualWidth*dpi),(float)(frame.ActualHeight*dpi));
-        if(glass.Error!=null)frame.Background=new SolidColorBrush(Color(107,"#0F172A"));
+        return DefSubclassProc(window,message,wp,lp);
     }
     private static SolidColorBrush Brush(string hex)=>new(Parse(hex));
     private static Color Color(byte alpha,string hex){var c=Parse(hex);c.A=alpha;return c;}
@@ -225,10 +334,11 @@ internal sealed class NativeOsd:IDisposable
     {uint n=Convert.ToUInt32(hex.TrimStart('#'),16);return Windows.UI.Color.FromArgb(hex.Length==9?(byte)(n>>24):(byte)255,(byte)(n>>16),(byte)(n>>8),(byte)n);}
     private Image OsdIcon(string key,string accent,double size)
     {
-        string asset=key=="awake"?"balance":key;
-        if(asset is not("office" or "balance" or "beast" or "geek" or "keyboard" or "touchpad" or "fan" or "lock" or "fn" or "caps" or "camera" or "mic" or "wifi" or "bluetooth"))asset="balance";
-        originalAsset=asset+"-"+accent.TrimStart('#').ToUpperInvariant()+".svg";
-        var source=new Microsoft.UI.Xaml.Media.Imaging.SvgImageSource(new Uri(System.IO.Path.Combine(AppContext.BaseDirectory,"Assets","Osd",originalAsset)));
+        string asset=key switch{"office"=>"mode-office","balance"=>"mode-balanced","beast"=>"mode-performance","geek"=>"mode-custom","lock"=>"win-lock","fn"=>"fn-lock","caps"=>"caps",_=>key};
+        string[] allowed=["mode-office","mode-balanced","mode-performance","mode-custom","win-lock","fn-lock","caps","keyboard","touchpad","fan","camera","mic","wifi","bluetooth","awake","display","refresh","brightness","battery","lighting","osd","gpu-integrated","gpu-hybrid","gpu-discrete"];
+        if(!allowed.Contains(asset))asset="info";
+        bool on=accent is not("#94A3B8" or "#F43F5E");originalAsset=asset+"-dark"+(on?"":"-off")+".svg";
+        var source=new Microsoft.UI.Xaml.Media.Imaging.SvgImageSource(new Uri(System.IO.Path.Combine(AppContext.BaseDirectory,"Assets","Approved",originalAsset)));
         var image=new Image{Width=size,Height=size,Stretch=Stretch.Uniform,Source=source,HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center};
         originalIconLoaded=false;image.ImageOpened+=(_,_)=>originalIconLoaded=true;image.ImageFailed+=(_,e)=>{iconFailure=e.ErrorMessage;OpenRevo.Core.DiagnosticLog.Event("osd.icon_failed","error",new{asset=originalAsset,error=iconFailure});};return image;
     }
@@ -248,6 +358,8 @@ internal sealed class NativeOsd:IDisposable
     [DllImport("gdi32.dll")]private static extern nint GetStockObject(int obj);
     [DllImport("user32.dll")]private static extern int FillRect(nint dc,ref Rect rect,nint brush);
     [DllImport("user32.dll")]private static extern bool GetClientRect(nint window,out Rect rect);
+    [DllImport("user32.dll",SetLastError=true)]private static extern bool GetLayeredWindowAttributes(nint hwnd,out uint colorKey,out byte alpha,out uint flags);
+    [DllImport("user32.dll",SetLastError=true)]private static extern bool SetLayeredWindowAttributes(nint hwnd,uint colorKey,byte alpha,uint flags);
     [DllImport("user32.dll")]private static extern int SetWindowRgn(nint window,nint region,bool redraw);
     [DllImport("user32.dll",SetLastError=true)]private static extern bool SetWindowPos(nint window,nint insertAfter,int x,int y,int width,int height,uint flags);
     [DllImport("user32.dll",EntryPoint="GetWindowLongPtrW")]private static extern nint GetWindowLongPtr(nint hwnd,int index);
@@ -255,3 +367,6 @@ internal sealed class NativeOsd:IDisposable
     [DllImport("user32.dll")]private static extern uint GetDpiForWindow(nint hwnd);
     [DllImport("user32.dll")]private static extern nint GetForegroundWindow();
 }
+
+
+

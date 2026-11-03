@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Windowing;
 using OpenRevo.Core;
@@ -23,7 +23,7 @@ public sealed partial class MainWindow
         [MarshalAs(UnmanagedType.ByValTStr,SizeConst=64)]public string InfoTitle;
         public uint InfoFlags;public Guid Guid;public nint BalloonIcon;
     }
-    private TrayData TrayRecord()=>new(){Size=(uint)Marshal.SizeOf<TrayData>(),Window=captionWindow,Id=1,Flags=7,Callback=TrayCallback,Icon=trayIcon,Tip=trayReviewMode?"Open-Revo · 临时托盘检查":"Open-Revo · 点击唤醒控制面板",Info="",InfoTitle=""};
+    private TrayData TrayRecord()=>new(){Size=(uint)Marshal.SizeOf<TrayData>(),Window=captionWindow,Id=1,Flags=0x87,Callback=TrayCallback,Icon=trayIcon,Tip=trayReviewMode?"Open-Revo · 临时托盘检查":trayTip,Info="",InfoTitle=""};
     private void InitializeTray()
     {
         if(uiReviewMode&&!trayReviewMode)return;
@@ -55,7 +55,7 @@ public sealed partial class MainWindow
     {
         if(uiReviewMode&&!trayReviewMode||exitRequested||settingsDataBusy||dataStorageExitPending)return false;
         if(!trayAvailable)AddTrayIcon();if(!trayAvailable){_=ShowMessage("托盘不可用","图标创建失败，窗口保持可见；可在设置页退出程序。");return false;}
-        RememberPanelShape();CloseCaptionExpandTip();trayHidden=true;AppWindow.Hide();UpdatePolling();return true;
+        RememberPanelShape();ResetCaptionHover();trayHidden=true;panelMotionStop?.Cancel();AppWindow.Hide();UpdatePolling();return true;
     }
     internal void StartHiddenToTray()=>DispatcherQueue.TryEnqueue(()=>HideToTray());
     private void WakeFromTray(string? mode=null)
@@ -65,9 +65,9 @@ public sealed partial class MainWindow
         trayHidden=false;
         if(mini!=targetMini)ToggleMini();
         if(AppWindow.Presenter is OverlappedPresenter presenter&&presenter.State==OverlappedPresenterState.Minimized)presenter.Restore();
-        AppWindow.Show();Activate();SetForegroundWindow(captionWindow);UpdatePolling();
+        ResetCaptionHover();AppWindow.Show();Activate();SetForegroundWindow(captionWindow);UpdatePolling();
     }
-    private bool RuntimeBusy=>updateBusy||hardwareBusy||quickBusy||requestedWinLocked.HasValue||takeoverChanging||tuningApplying||displayBusy||brightnessApplying||gpuChanging||desktopServiceBusy||sleepOfficeBusy||settingsDataBusy||settingsPowerBusy||batteryGuardBusy;
+    private bool RuntimeBusy=>panelShapeChanging||trayHoverRead is {IsCompleted:false}||updateBusy||hardwareBusy||quickBusy||requestedWinLocked.HasValue||takeoverChanging||tuningApplying||displayBusy||brightnessApplying||gpuChanging||desktopServiceBusy||sleepOfficeBusy||settingsDataBusy||settingsPowerBusy||batteryGuardBusy;
     private async Task ExitFromTray()
     {
         if(exitInProgress||closed)return;exitInProgress=true;exitRequested=true;
@@ -93,9 +93,9 @@ public sealed partial class MainWindow
         nint menu=CreatePopupMenu();if(menu==0)return;
         try
         {
-            AppendMenu(menu,0,1,"打开控制面板");AppendMenu(menu,0,2,"打开迷你面板");AppendMenu(menu,0,3,"打开完整面板");AppendMenu(menu,0,4,"设置与诊断");AppendMenu(menu,0x800,0,"");AppendMenu(menu,0,9,"退出 Open-Revo");
+            AppendMenu(menu,0,1,"打开控制面板");AppendMenu(menu,0,2,"打开迷你面板");AppendMenu(menu,0,3,"打开完整面板");AppendMenu(menu,0,4,"设置与诊断");AppendMenu(menu,0,5,"检查更新");AppendMenu(menu,0x800,0,"");AppendMenu(menu,0,9,"退出 Open-Revo");
             GetCursorPos(out var point);SetForegroundWindow(captionWindow);uint command=TrackPopupMenu(menu,0x100|0x80,point.X,point.Y,0,captionWindow,0);
-            DispatcherQueue.TryEnqueue(()=>{if(command==9){_=ExitFromTray();return;}if(command is 1 or 2 or 3 or 4){if(command==4){currentPage="settings";customTuningOpen=colorTuningOpen=false;}WakeFromTray(command==2?"mini":command is 3 or 4?"full":null);if(command==4)Render();}});
+            DispatcherQueue.TryEnqueue(()=>{if(command==9){_=ExitFromTray();return;}if(command is 1 or 2 or 3 or 4 or 5){if(command is 4 or 5){currentPage=command==5?"updates":"settings";customTuningOpen=colorTuningOpen=false;}WakeFromTray(command==2?"mini":command is 3 or 4 or 5?"full":null);if(command is 4 or 5)Render();}});
         }
         finally{DestroyMenu(menu);}
     }
@@ -109,6 +109,7 @@ public sealed partial class MainWindow
         if(message==TrayCallback)
         {
             uint action=(uint)((long)lParam&0xFFFF);
+            if(action is 0x200 or 0x406)DispatcherQueue.TryEnqueue(()=>{_ = RefreshTrayTelemetry();});
             if(action is 0x400 or 0x401 or 0x202 or 0x203)
             {if((DateTime.UtcNow-lastTrayWake).TotalMilliseconds>250){lastTrayWake=DateTime.UtcNow;DispatcherQueue.TryEnqueue(()=>WakeFromTray());}}
             else if(action is 0x205 or 0x7B)TrayMenu();return true;
@@ -130,3 +131,5 @@ public sealed partial class MainWindow
     [DllImport("user32.dll")]private static extern bool DestroyMenu(nint menu);
     [StructLayout(LayoutKind.Sequential)]private struct TrayPoint{public int X,Y;}
 }
+
+

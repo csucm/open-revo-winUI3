@@ -32,7 +32,11 @@ public sealed partial class MainWindow
         captionGrid.Height=height;
         double inset=AppWindow.TitleBar.RightInset/scale;
         captionGrid.Margin=new Thickness(12,0,inset>0?inset:138,0);
-        captionGrid.RenderTransform=new TranslateTransform{Y=offset};
+        if(captionGrid.RenderTransform is TranslateTransform transform)
+        {
+            if(Math.Abs(transform.Y-offset)>.01)transform.Y=offset;
+        }
+        else captionGrid.RenderTransform=new TranslateTransform{Y=offset};
         if(panelToggle!=null)panelToggle.Height=height;
         if(themeToggle!=null)themeToggle.Height=height;
     }

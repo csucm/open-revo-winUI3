@@ -26,8 +26,8 @@ public sealed partial class MainWindow
         syncingLighting=true;
         try
         {
-            if(lightingModeBox!=null) lightingModeBox.SelectedItem=rgbMode;
-            if(lightingColorBox!=null)lightingColorBox.SelectedIndex=customRgb.HasValue?Array.FindIndex(colorPresets,x=>x.Hex==customRgb.Value):Math.Max(0,Array.FindIndex(colorPresets,x=>x.Name==rgbColor));
+            if(lightingModeBox!=null) lightingModeBox.SelectedItem=lightingReadFresh?rgbMode:null;
+            if(lightingColorBox!=null)lightingColorBox.SelectedIndex=!lightingReadFresh?-1:customRgb.HasValue?Array.FindIndex(colorPresets,x=>x.Hex==customRgb.Value):Math.Max(0,Array.FindIndex(colorPresets,x=>x.Name==rgbColor));
             if(lightingLevelBar!=null) lightingLevelBar.Value=rgbLevel;
             if(lightingLevelLabel!=null) lightingLevelLabel.Text=!lightingReadFresh?"待读取":rgbLevel==0?"关闭":$"{rgbLevel} / 4";
             Put("lightingTitle",MiniLightingTitle);
@@ -36,11 +36,11 @@ public sealed partial class MainWindow
         finally { syncingLighting=false; }
     }
     private static readonly (string Name, uint Hex)[] colorPresets =
-    [ ("冰晶蓝",0x38bdf8),("机械青",0x00ffff),("电竞紫",0xa855f7),("极光绿",0x10b981),
-      ("烈焰红",0xf43f5e),("暖阳金",0xfbbf24),("幻影粉",0xec4899),("纯净白",0xffffff) ];
+    [ ("冰晶蓝",0x29b6f2),("机械青",0x12c7bf),("电竞紫",0x9662ed),("极光绿",0x13af7d),
+      ("烈焰红",0xf5436a),("暖阳金",0xffc83d),("幻影粉",0xed4ba0),("纯净白",0xe7ecf2) ];
     private FrameworkElement AdaptiveLightingControls()
     {
-        if (keyboard.Kind is "None" or "Unknown") return Ui.Text(keyboard.Description, 12, muted:true);
+        bool unknown = keyboard.Kind is "None" or "Unknown";
         bool supported = keyboard.Kind == "SingleZone" && hardware.Active&&lightingReadFresh;
         string[] effects = keyboard.Kind switch
         {
@@ -54,7 +54,7 @@ public sealed partial class MainWindow
         mode.ItemContainerStyle.Setters.Add(new Setter(Control.FontSizeProperty,12d));
         lightingModeBox=mode;
         mode.SelectionChanged += async (_,_)=> {if(!syncingLighting && mode.SelectedItem is string value){rgbMode=value;if(value=="关闭背光"){if(rgbLevel>0)lastLightingLevel=rgbLevel;rgbLevel=0;}else if(rgbLevel==0)rgbLevel=lastLightingLevel;SyncLightingEditors();await ScheduleLighting();}};
-        ToolTipService.SetToolTip(mode,supported?"选择灯效，立即生效":"已识别背光类型，此机型调节尚未验证");
+        ToolTipService.SetToolTip(mode,unknown?"背光参数未识别，控件保留并禁用":supported?"选择灯效，立即生效":"已识别背光类型，此机型调节尚未验证");
         var level = lightingLevelBar = new Slider { Minimum=0,Maximum=4,StepFrequency=1,TickFrequency=1,SnapsTo=Microsoft.UI.Xaml.Controls.Primitives.SliderSnapsTo.Ticks,Value=rgbLevel,IsEnabled=supported,MinHeight=25 };
         lightingLevelLabel=Ui.Text(!lightingReadFresh?"待读取":rgbLevel==0?"关闭":$"{rgbLevel} / 4",11,muted:true);
         level.ValueChanged += async (_,_)=>{if(syncingLighting)return;rgbLevel=(int)level.Value;if(rgbLevel==0)rgbMode="关闭背光";else{lastLightingLevel=rgbLevel;if(rgbMode=="关闭背光")rgbMode="静态单色";}SyncLightingEditors();await ScheduleLighting();};
@@ -62,6 +62,7 @@ public sealed partial class MainWindow
         var more=Ui.Button("更多",(_,_)=>{currentPage="devices";if(mini)ToggleMini();else Render();});
         var moreContent=new StackPanel{Orientation=Orientation.Horizontal,Spacing=5,HorizontalAlignment=HorizontalAlignment.Center};
         moreContent.Children.Add(Ui.Icon("",14));moreContent.Children.Add(Ui.Text("更多",12));more.Content=moreContent;
+        more.IsEnabled=!unknown;
         ToolTipService.SetToolTip(more,"打开背光详细设置");
         ComboBox Colors(string name)
         {
@@ -79,7 +80,7 @@ public sealed partial class MainWindow
             ToolTipService.SetToolTip(box,name+"，选择后立即生效"); return box;
         }
         var controls = new StackPanel { Spacing=mini?2:12 };
-        if(mini)controls.Children.Add(keyboard.HasColor?Columns(mode,Colors("背光颜色"),more):Columns(mode,more));
+        if(mini)controls.Children.Add((keyboard.HasColor||unknown)?Columns(mode,Colors("背光颜色"),more):Columns(mode,more));
         else
         {
             mode.FontSize=13;mode.MinWidth=180;
@@ -130,7 +131,11 @@ public sealed partial class MainWindow
                     foreach(var control in new Control?[]{lightingModeBox,lightingColorBox,lightingLevelBar,lightingColorPicker})if(control!=null)control.IsEnabled=false;
                     return;
                 }
-                if(generation==lightingGeneration)return;
+                if(generation==lightingGeneration)
+                {
+                    if(applied)ConfirmedActionOsd(level==0?"关闭背光":rainbow?"彩色循环":rgbMode,"lighting");
+                    return;
+                }
                 // Leading update is immediate. While busy, coalesce into the latest
                 // request; a moving pointer must not keep postponing all writes.
                 await Task.Delay(75,token);
@@ -139,3 +144,4 @@ public sealed partial class MainWindow
         catch(OperationCanceledException)when(token.IsCancellationRequested){}
     }
 }
+

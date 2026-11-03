@@ -8,12 +8,11 @@ namespace OpenRevo.Native;
 
 internal static class Ui
 {
-    public static TextBlock Text(string text, double size = 14, bool strong = false, bool muted = false) => new()
+    public static TextBlock Text(string text,double size=14,bool strong=false,bool muted=false)
     {
-        Text = text, FontSize = Design.FontSize(size), FontFamily = new FontFamily("Segoe UI"), TextWrapping = TextWrapping.Wrap,
-        FontWeight = strong ? FontWeights.SemiBold : FontWeights.Normal,
-        Opacity = muted ? 0.7 : 1.0
-    };
+        var block=muted?(TextBlock)Microsoft.UI.Xaml.Markup.XamlReader.Load("<TextBlock xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Foreground='{ThemeResource OverviewMuted}'/>"):new TextBlock();
+        block.Text=text;block.FontSize=Design.FontSize(size);block.LineHeight=block.FontSize==24?30:block.FontSize*1.5;block.LineStackingStrategy=LineStackingStrategy.BlockLineHeight;block.FontFamily=new FontFamily("Segoe UI");block.TextWrapping=TextWrapping.Wrap;block.FontWeight=strong?FontWeights.SemiBold:FontWeights.Normal;return block;
+    }
     public static StackPanel Stack(params UIElement[] children)
     {
         var panel = new StackPanel { Spacing = 12 };
@@ -23,7 +22,7 @@ internal static class Ui
     public static Border Card(UIElement child) => new() { Style = (Style)Application.Current.Resources["CardStyle"], Child = child };
     public static Button Button(string label, RoutedEventHandler action, bool accent = false)
     {
-        var button = new Button { Content = label, FontSize=14, FontFamily = new FontFamily("Segoe UI"), Padding = new Thickness(16, 8, 16, 8), VerticalAlignment=VerticalAlignment.Center, VerticalContentAlignment=VerticalAlignment.Center };
+        var button = new Button { Content = label, FontSize=14, FontFamily = new FontFamily("Segoe UI"), Padding = new Thickness(12, 6, 12, 6), HorizontalContentAlignment=HorizontalAlignment.Center, VerticalAlignment=VerticalAlignment.Center, VerticalContentAlignment=VerticalAlignment.Center };
         Design.AttachPressMotion(button);
         var parts = label.Split('\n', 2);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, parts.Length == 2 ? parts[1] : label);
@@ -52,10 +51,11 @@ internal static class Ui
     { IsOpen = true, IsClosable = false, Title = title, Message = message, Severity = severity };
     public static FrameworkElement Icon(string glyph, double size,bool accent=false)
     {
+        if(ApprovedIcons.Glyph(glyph) is string approved)return ApprovedIcons.Create(approved,size);
         string? geometry = glyph switch
         {
             "\uE70F" => "M12,2 L20,5 L20,11 C20,16 17,20 12,22 C7,20 4,16 4,11 L4,5 Z",
-            "\uE740" => "M14,3 L21,3 L21,10 M21,3 L14,10 M3,14 L3,21 L10,21 M3,21 L10,14",
+            "\uE740" => "M5,5 L19,5 L19,19 L5,19 Z",
             "\uE73F" => "M3,10 L10,10 L10,3 M10,10 L3,3 M14,21 L14,14 L21,14 M14,14 L21,21",
             "\uEC4A" => "M13,2 C15,8 8,8 11,13 C7,12 7,9 7,9 C2,14 5,22 12,22 C20,22 23,13 16,8 C17,13 13,14 13,14 C15,9 10,8 13,2 Z",
             "\uE713" => "M5,2 L5,7 M5,11 L5,22 M2,7 L8,7 L8,11 L2,11 Z M12,2 L12,14 M12,18 L12,22 M9,14 L15,14 L15,18 L9,18 Z M19,2 L19,5 M19,9 L19,22 M16,5 L22,5 L22,9 L16,9 Z",

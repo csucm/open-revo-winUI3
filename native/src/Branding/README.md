@@ -14,8 +14,9 @@
 
 Native的ApplicationIcon、标题栏、AppWindow和托盘使用Native/App.ico；安装器SetupIconFile直接引用Branding/App.ico。开始菜单、桌面快捷方式和卸载列表使用应用EXE内嵌图标。Cpp通过App.rc嵌入同一ICO，并继续用App.ico设置窗口与托盘。
 
-后续从精简版或旧源码快照打包时，必须同步这份资源、生成后的App.ico和相应构建引用。不得直接复用带旧图标的EXE或旧发布目录。不要覆盖已交付的历史包。此目录位于src下，主build.ps1的源码归档会包含原图、ICO与脚本。
+C#发行源码包保留正式RGBA PNG、ICO及导出器。方底设计原稿和独立C++原型保留在开发仓库，不再随C#安装器重复分发；缺少设计原稿时可从正式PNG精确复建ICO。后续从精简版或旧源码快照打包时，必须同步这份资源、生成后的App.ico和相应构建引用。不得直接复用带旧图标的EXE或旧发布目录。不要覆盖已交付的历史包。此目录位于src下，主build.ps1的源码归档会包含原图、ICO与脚本。
 
 概念稿由内置image_gen生成。选定稿和提示词位于项目根目录outputs/icon-concepts-2026-11-02/SELECTED.md；方底裁切源与该选定稿逐字节相同。圆角采用用户授权的精确裁切，未采用有毛边的生成稿。
 
 圆角验收见evidence/rounded-icon/verification.json。用户本轮明确只更新资源与配置，不重打包。现有0.9.7安装器检查为旧方底黑蓝图标10帧一致，不能声称已包含圆角；其哈希保持不变。
+

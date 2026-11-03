@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using OpenRevo.Core.Hal;
@@ -62,7 +62,9 @@ public sealed partial class MainWindow
         if (detailKey != null && info is TextBlock block) live[detailKey] = block;
         var heading = Ui.Row(label, info);
         var stack = Ui.Stack(heading, content); stack.Spacing = mini ? 4 : 14;
-        var card = Ui.Card(stack); card.Padding = new Thickness(mini ? 7 : 22); return card;
+        var card = Ui.Card(stack); card.Padding = new Thickness(mini ? 7 : 22);
+        string? key=titleKey switch{"performanceTitle"=>"performance","gpuTitle"=>"gpu","refreshTitle"=>"refresh","lightingTitle"=>"lighting",_=>title=="电池健康"?"battery":null};
+        return key==null?card:PanelAnchor(key,card);
     }
     private Button MiniControl(string title, Func<object> operation, string explanation)
     {
@@ -131,7 +133,7 @@ public sealed partial class MainWindow
     private void UpdateCompactValues()
     {
         int? current = hardware.State?.Upper ?? ec.BatteryLimit;
-        Put("miniLimit", current is int currentLimit ? $"上限 {currentLimit}%" : "监测中");
+        Put("miniLimit", current is int currentLimit ? $"上限 {currentLimit}%" : "上限 —");
         foreach (var (limit, button) in compactChargeButtons)
         {
             button.IsEnabled=hardware.Active&&!hardwareBusy&&hardware.SupportsBattery;
@@ -150,3 +152,4 @@ public sealed partial class MainWindow
         return AdaptiveLightingControls();
     }
 }
+

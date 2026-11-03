@@ -60,7 +60,7 @@ public sealed partial class MainWindow
     }
     private void UpdateDisplayValues()
     {
-        UpdateMiniRefreshControls();
+        UpdateMiniRefreshControls();Put("approvedRefreshValue",displayState?.Active==true?displayState.Hertz+" Hz":"—");if(approvedRefreshChoice!=null)approvedRefreshChoice.IsEnabled=displayState?.Active==true&&!displayBusy;
         Put("refreshTitle", displayState?.Active == true ? $"屏幕刷新率：{displayState.Hertz} Hz" : "屏幕刷新率：— Hz");
         foreach (var (rate, button) in refreshButtons)
         {

@@ -65,7 +65,7 @@ public sealed partial class MainWindow
             bool? state=key=="osd"?osdEnabled:extraSwitches.Get(ExtraSwitchKind(key));
             bool busy=extraSwitchBusy.Contains(key);
             button.IsEnabled=!busy&&(key=="osd"||upstream!=null&&state.HasValue&&(key is not("fn" or "touchpad")||hardware.Active));
-            SetChoiceVisual(button,state==true);
+            if(!mini)UpdateApprovedQuickButton(button,key,state,busy);else SetChoiceVisual(button,state==true);
             if(button.Content is StackPanel body)
             {
                 while(body.Children.Count>2)body.Children.RemoveAt(2);
@@ -91,6 +91,8 @@ public sealed partial class MainWindow
                 upstream.SetOverviewSwitch(kind,before,!before);return upstream.ReadOverviewSwitches();
             });
             if(extraSwitches.Get(kind)!=!before)throw new IOException("设备回读未确认改变。");
+            uint feature=ExtraOsdKind(key);
+            if(feature!=0)ConfirmShortcutOsd(feature,before?0u:1u);
         }
         catch(Exception error)
         {
@@ -102,21 +104,49 @@ public sealed partial class MainWindow
     private void ObserveOsd(uint feature,uint value)
     {
         bool changed=observedOsd.TryGetValue(feature,out uint before)&&before!=value;observedOsd[feature]=value;
-        if(changed&&osdEnabled)_=NotifyCoreOsd(feature,value);
+        if(changed&&osdEnabled)NotifyCoreOsd(feature,value);
     }
-    private async Task NotifyCoreOsd(uint feature,uint value)
+    private void ConfirmShortcutOsd(uint feature,uint value)
     {
-        if(closed||upstream==null||!osdEnabled||uiReviewMode)return;
+        observedOsd[feature]=value;
+        NotifyCoreOsd(feature,value);
+    }
+    private void NotifyCoreOsd(uint feature,uint value)
+    {
+        string? name=feature switch
+        {
+            1=>"power_mode",2=>"fan_boost",3=>"wifi",4=>"bluetooth",5=>"touchpad",
+            6=>"camera",7=>"mic",8=>"win_key",9=>"fn_lock",10=>"keep_awake",_=>null
+        };
+        if(name!=null)PresentOsd(OsdMessage.FromFeature(name,value.ToString()));
+    }
+    private void PresentOsd(OsdMessage message)
+    {
+        if(closed||exitRequested||!osdEnabled||uiReviewMode)return;
         try
         {
-            var item=await Task.Run(()=>upstream.SendOsd(feature,value));
-            if(item==null||closed||!osdEnabled)return;
-            nativeOsd??=new NativeOsd(DispatcherQueue);nativeOsd.Configure(systemPreferences);nativeOsd.ShowFeature(item.Feature,item.Value);
+            nativeOsd??=new NativeOsd(DispatcherQueue);
+            nativeOsd.Configure(systemPreferences);
+            nativeOsd.Show(message);
         }
-        catch(Exception error){actions.Add("OSD: "+error.Message);}
+        catch(Exception error)
+        {
+            OpenRevo.Core.DiagnosticLog.Failure("osd.present.failed",error,throttle:true);
+        }
     }
     private void ShowNativeOsd(string title,string status)
-    {if(closed||!osdEnabled)return;nativeOsd??=new NativeOsd(DispatcherQueue);nativeOsd.Configure(systemPreferences);nativeOsd.Show(title,status);}
+        =>PresentOsd(new OsdMessage(title+" · "+status,"balance","#38BDF8"));
+    private string lastActionOsd="";
+    private DateTimeOffset lastActionOsdAt;
+    private void ConfirmedActionOsd(string text,string icon)
+    {
+        if(closed||!osdEnabled||uiReviewMode)return;
+        string key=icon+":"+text;
+        if(lastActionOsd==key&&DateTimeOffset.Now-lastActionOsdAt<TimeSpan.FromMilliseconds(700))return;
+        lastActionOsd=key;
+        lastActionOsdAt=DateTimeOffset.Now;
+        PresentOsd(new OsdMessage(text,icon,"#92B9FF"));
+    }
     private void ObserveHardwareOsd()
     {
         if(hardware.CurrentMode is int mode&&mode is >=1 and <=4)ObserveOsd(1,(uint)mode);

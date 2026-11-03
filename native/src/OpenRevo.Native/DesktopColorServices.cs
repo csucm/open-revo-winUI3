@@ -20,7 +20,7 @@ public sealed partial class MainWindow
     private string lastIccProfile="std_srgb";
     private void ResetColorServiceBindings()
     {
-        iccProfileChoice=null;colorServiceToggle=null;iccServiceToggle=null;colorServiceStatus=null;iccServiceStatus=null;iccImport=null;colorEditorButton=null;colorNumbers.Clear();colorSliders.Clear();colorPresetButtons.Clear();
+        approvedColorPresetChoice=null;iccProfileChoice=null;colorServiceToggle=null;iccServiceToggle=null;colorServiceStatus=null;iccServiceStatus=null;iccImport=null;colorEditorButton=null;colorNumbers.Clear();colorSliders.Clear();colorPresetButtons.Clear();
     }
     private void RenderDesktopColorServices()
     {
@@ -38,43 +38,32 @@ public sealed partial class MainWindow
         var iccBody=Ui.Stack(DesktopAlignedRow(ReplicaLeading("display",Ui.Text("ICC 色彩校准",14,true),"配置文件 · 物理内屏"),iccActions),iccServiceStatus);iccBody.Spacing=5;
         var iccCard=Ui.Card(iccBody);iccCard.Padding=new Thickness(16);page.Children.Add(iccCard);SyncColorServices();
     }
+    private ComboBox? approvedColorPresetChoice;
     private void RenderColorTuningPage()
     {
         if(colorDraft==null&&serviceColor.ValueKind==JsonValueKind.Object)colorDraft=JsonNode.Parse(serviceColor.GetProperty("active_preset").GetRawText())!.AsObject();
-        var presets=new DesktopTiles{PreferredColumns=6,MinimumItemWidth=105,ColumnSpacing=8,RowSpacing=8};
-        if(serviceColor.ValueKind==JsonValueKind.Object)
-        foreach(var preset in serviceColor.GetProperty("presets").EnumerateArray())
+        var presets=serviceColor.ValueKind==JsonValueKind.Object?serviceColor.GetProperty("presets").EnumerateArray().Select(p=>p.Clone()).ToArray():[];
+        approvedColorPresetChoice=new ComboBox{Width=180,PlaceholderText="待读取",ItemsSource=presets.Select(p=>new ServiceChoice(p.GetProperty("id").GetString()!,p.GetProperty("name").GetString()!)).ToArray()};
+        approvedColorPresetChoice.SelectionChanged+=async(_,_)=>{if(syncingColorServices||approvedColorPresetChoice.SelectedItem is not ServiceChoice choice)return;var selected=presets.First(p=>p.GetProperty("id").GetString()==choice.Id);colorDraft=JsonNode.Parse(selected.GetRawText())!.AsObject();SyncColorDraft();await SubmitColor(enabledOverride:true);};
+        var tools=new SuiteWrapPanel();tools.Children.Add(Ui.Button("导入",async(_,_)=>await ImportColorDraft()));tools.Children.Add(Ui.Button("导出",async(_,_)=>{try{if(colorDraft!=null)await SaveJsonFile("色彩方案.json",colorDraft.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));}catch(Exception error){await ShowMessage("导出未完成",error.Message);}}));
+        tools.Children.Add(Ui.Button("重置",async(_,_)=>{if(colorDraft==null||serviceColor.ValueKind!=JsonValueKind.Object)return;string? id=colorDraft["id"]?.GetValue<string>();var factory=serviceColor.GetProperty("factory_presets").EnumerateArray().FirstOrDefault(p=>p.GetProperty("id").GetString()==id);if(factory.ValueKind!=JsonValueKind.Object)return;colorDraft=JsonNode.Parse(factory.GetRawText())!.AsObject();SyncColorDraft();await SubmitColor();}));
+        colorServiceToggle=ServiceToggle("全局滤镜",JsonBool(serviceColor,"runtime_enabled"),async(_,_)=>{if(!syncingColorServices)await SubmitColor();});
+        page.Children.Add(DetailSection("色彩预设",SuiteVisuals.Stack(0,SuiteSettingRow("预设方案","选择后实时更新。",approvedColorPresetChoice),SuiteVisuals.Rule(tools),SuiteSettingRow("全局滤镜","影响所有显示器。",colorServiceToggle))));
+        FrameworkElement Adjust(string key,string title,double min,double max,double step,string unit="")
         {
-            string id=preset.GetProperty("id").GetString()!,name=preset.GetProperty("name").GetString()!;
-            var button=Ui.Button(name,async(_,_)=>{colorDraft=JsonNode.Parse(preset.GetRawText())!.AsObject();SyncColorDraft();await SubmitColor(enabledOverride:true);});
-            var content=new Grid{ColumnSpacing=6};content.ColumnDefinitions.Add(new(){Width=new GridLength(18)});content.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});
-            var icon=SemanticGraphic(id.Contains("vibrant")?"zap":id.Contains("low")?"leaf":id.Contains("cinema")?"flame":id.Contains("photo")?"star":id.Contains("internet")?"display":"color",18);icon.VerticalAlignment=VerticalAlignment.Center;content.Children.Add(icon);
-            var label=Ui.Text(name,12,true);label.TextWrapping=TextWrapping.NoWrap;label.TextTrimming=TextTrimming.CharacterEllipsis;label.VerticalAlignment=VerticalAlignment.Center;Grid.SetColumn(label,1);content.Children.Add(label);ToolTipService.SetToolTip(button,name);
-            button.Content=content;button.MinHeight=48;button.HorizontalAlignment=HorizontalAlignment.Stretch;button.HorizontalContentAlignment=HorizontalAlignment.Stretch;button.Padding=new Thickness(8);colorPresetButtons[id]=button;presets.Children.Add(button);
-        }
-        var tools=new StackPanel{Orientation=Orientation.Horizontal,Spacing=8};
-        tools.Children.Add(Ui.Button("导入",async(_,_)=>await ImportColorDraft()));tools.Children.Add(Ui.Button("导出",async(_,_)=>{try{if(colorDraft!=null)await SaveJsonFile("色彩方案.json",colorDraft.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));}catch(Exception error){await ShowMessage("导出未完成",error.Message);}}));
-        tools.Children.Add(Ui.Button("重置当前预设",async(_,_)=>
-        {
-            if(colorDraft==null||serviceColor.ValueKind!=JsonValueKind.Object)return;
-            string? id=colorDraft["id"]?.GetValue<string>();var factory=serviceColor.GetProperty("factory_presets").EnumerateArray().FirstOrDefault(p=>p.GetProperty("id").GetString()==id);
-            if(factory.ValueKind!=JsonValueKind.Object)return;colorDraft=JsonNode.Parse(factory.GetRawText())!.AsObject();SyncColorDraft();await SubmitColor();
-        }));page.Children.Add(ReplicaCard("color","色彩预设方案",presets,tools));
-        FrameworkElement Adjust(string key,string title,double min,double max,double step,string icon)
-        {
-            double value=colorDraft?[key]?.GetValue<double>()??(key=="color_temp_k"?6500:1);
-            var number=new NumberBox{Minimum=min,Maximum=max,SmallChange=step,LargeChange=step*10,Width=112,Value=value,SpinButtonPlacementMode=NumberBoxSpinButtonPlacementMode.Compact};colorNumbers[key]=number;
-            var slider=new Slider{Minimum=min,Maximum=max,StepFrequency=step,Value=value};colorSliders[key]=slider;bool linking=false;
+            double? known=colorDraft?[key]?.GetValue<double>();
+            var number=new NumberBox{Minimum=min,Maximum=max,SmallChange=step,LargeChange=step*10,Width=84,Value=known??double.NaN,FontSize=14,SpinButtonPlacementMode=NumberBoxSpinButtonPlacementMode.Hidden};colorNumbers[key]=number;
+            var slider=new Slider{Minimum=min,Maximum=max,StepFrequency=step,Value=known??min,MinHeight=32};colorSliders[key]=slider;bool linking=false;
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(number,title+"数值");Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(slider,title);
             number.ValueChanged+=async(_,args)=>{if(syncingColorServices||double.IsNaN(args.NewValue))return;linking=true;slider.Value=args.NewValue;linking=false;if(colorDraft==null)return;if(key=="color_temp_k")colorDraft[key]=(int)args.NewValue;else colorDraft[key]=args.NewValue;await SubmitColor(true);};
             slider.ValueChanged+=(_,_)=>{if(!linking&&!syncingColorServices)number.Value=slider.Value;};
-            var body=Ui.Stack(slider,DesktopAlignedRow(Ui.Text(min.ToString("0.##"),11,muted:true),Ui.Text(max.ToString("0.##"),11,muted:true)));body.Spacing=2;
-            var header=DesktopAlignedRow(ReplicaLeading(icon,Ui.Text(title,12,true),""),number);var content=Ui.Stack(header,body);content.Spacing=0;return content;
+            var header=Ui.Row(Ui.Text(title),SettingsControls(number,Ui.Text(unit,12,muted:true)));
+            return SuiteVisuals.Rule(SuiteVisuals.Stack(8,header,slider,Ui.Row(Ui.Text(min.ToString("0.##")+" "+unit,12,muted:true),Ui.Text(max.ToString("0.##")+" "+unit,12,muted:true))),14);
         }
-        var sliders=GroupedColumns(Adjust("color_temp_k","色温 (K)",4000,9000,50,"sun"),Adjust("saturation","色彩鲜艳度 / 饱和度",0,2,.05,"color"),Adjust("contrast","对比度",.5,1.5,.05,"display"),Adjust("gamma","伽马曲线 (Gamma)",.7,1.3,.05,"tuning"));
-        var gains=OverviewGrid(3,190,Adjust("gain_r","红色增益",.5,1.5,.02,"flame"),Adjust("gain_g","绿色增益",.5,1.5,.02,"leaf"),Adjust("gain_b","蓝色增益",.5,1.5,.02,"cpu"));
-        var gainEditor=new Expander{Header="RGB 独立原色增益微调",Content=gains,HorizontalAlignment=HorizontalAlignment.Stretch,HorizontalContentAlignment=HorizontalAlignment.Stretch};DesktopTiles.SetFullRow(gainEditor);
-        sliders.Children.Add(gainEditor);page.Children.Add(ReplicaCard("tuning","实时色彩微调",sliders));
-        colorServiceStatus=Ui.Text("",12,muted:true);page.Children.Add(colorServiceStatus);SyncColorServices();SyncColorDraft();
+        page.Children.Add(DetailGrid(DetailSection("色调与饱和度",SuiteVisuals.Stack(0,Adjust("color_temp_k","色温",4000,9000,50,"K"),Adjust("saturation","饱和度",0,2,.05))),DetailSection("亮度与对比",SuiteVisuals.Stack(0,Adjust("contrast","对比度",.5,1.5,.05),Adjust("gamma","Gamma",.7,1.3,.05)))));
+        var gains=SuiteVisuals.Stack(0,Adjust("gain_r","红色增益",.5,1.5,.02),Adjust("gain_g","绿色增益",.5,1.5,.02),Adjust("gain_b","蓝色增益",.5,1.5,.02));gains.Visibility=Visibility.Collapsed;
+        var expand=Ui.Button("展开微调",(_,_)=>gains.Visibility=gains.Visibility==Visibility.Visible?Visibility.Collapsed:Visibility.Visible);SuiteVisuals.Flat(expand,34);page.Children.Add(DetailSection("RGB 独立增益",SuiteVisuals.Stack(0,expand,gains)));
+        colorServiceStatus=Ui.Text("状态待读取",12,muted:true);page.Children.Add(DetailSection("生效状态",SuiteSettingRow("滤镜回读","矩阵和 Gamma 分别确认。",colorServiceStatus)));SyncColorServices();SyncColorDraft();
     }
     private async Task ImportColorDraft()
     {
@@ -92,11 +81,12 @@ public sealed partial class MainWindow
     private void SyncColorDraft()
     {
         if(colorDraft==null)return;syncingColorServices=true;
-        try{foreach(var(key,box)in colorNumbers)if(colorDraft[key]!=null){box.Value=colorDraft[key]!.GetValue<double>();if(colorSliders.TryGetValue(key,out var slider))slider.Value=box.Value;}foreach(var(id,button)in colorPresetButtons)SetChoiceVisual(button,colorDraft["id"]?.GetValue<string>()==id);}
+        try{if(approvedColorPresetChoice!=null)approvedColorPresetChoice.SelectedItem=approvedColorPresetChoice.Items.OfType<ServiceChoice>().FirstOrDefault(p=>p.Id==colorDraft["id"]?.GetValue<string>());foreach(var(key,box)in colorNumbers)if(colorDraft[key]!=null){box.Value=colorDraft[key]!.GetValue<double>();if(colorSliders.TryGetValue(key,out var slider))slider.Value=box.Value;}foreach(var(id,button)in colorPresetButtons)SetChoiceVisual(button,colorDraft["id"]?.GetValue<string>()==id);}
         finally{syncingColorServices=false;}
     }
     private void SyncColorServices()
     {
+        RefreshPaintedState();
         syncingColorServices=true;
         try
         {

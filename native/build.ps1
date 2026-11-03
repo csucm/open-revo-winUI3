@@ -1,4 +1,4 @@
-param([string]$DotNet = 'dotnet', [string]$Iscc = 'ISCC.exe', [string]$Cargo = 'cargo', [switch]$Offline, [switch]$Compact)
+param([string]$DotNet = 'dotnet', [string]$Iscc = 'ISCC.exe', [string]$Cargo = 'cargo', [switch]$Offline, [switch]$Compact, [ValidatePattern('^[a-z0-9-]+$')][string]$Variant = 'shared')
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 & (Join-Path $root 'src/Branding/Assert-Icon.ps1')
@@ -7,14 +7,14 @@ $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 $native = Join-Path $root 'src/OpenRevo.Native/OpenRevo.Native.csproj'
 $checks = Join-Path $root 'src/OpenRevo.Checks/OpenRevo.Checks.csproj'
 $version = ([xml](Get-Content -LiteralPath $native -Raw)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
-$app = Join-Path $root ('app-' + $version + '-final')
-$evidence = Join-Path $root ('evidence/package-' + $version)
+$app = Join-Path $root ('app-' + $version + '-' + $Variant)
+$evidence = Join-Path $root ('evidence/package-' + $version + '-' + $Variant)
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 $compactProperties = @()
-if ($Compact) { $compactProperties = @(('-p:CustomAfterMicrosoftCommonTargets=' + (Join-Path $root 'packaging/CompactPackage.targets')), '-p:NuGetLockFilePath=packages.compact.lock.json') }
+# Shared deployment never imports the self-contained trimming experiment.
 $offlineRestore = @(); $offlineCargo = @()
 if ($Offline) { $offlineRestore = @('--ignore-failed-sources', '-p:NuGetAudit=false'); $offlineCargo = @('--offline') }
-& $DotNet restore $native -p:Platform=x64 -p:SelfContained=true --locked-mode @offlineRestore @compactProperties
+& $DotNet restore $native -p:Platform=x64 -p:SelfContained=false --locked-mode @offlineRestore @compactProperties
 if ($LASTEXITCODE -ne 0) { throw 'Native restore failed.' }
 & $DotNet restore $checks --locked-mode @offlineRestore
 if ($LASTEXITCODE -ne 0) { throw 'Checks restore failed.' }
@@ -36,12 +36,14 @@ if ($LASTEXITCODE -ne 0) { throw 'OSD native frame checks failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Native extension checks failed.' }
 & $DotNet (Join-Path $root 'src/OpenRevo.Checks/bin/Release/net10.0-windows10.0.26100.0/OpenRevo.Checks.dll') --preference-persistence-checks (Join-Path $evidence 'preference-checks.json')
 if ($LASTEXITCODE -ne 0) { throw 'Preference checks failed.' }
-& $DotNet restore $native -p:Platform=x64 -p:SelfContained=true --locked-mode @offlineRestore @compactProperties
+& $DotNet restore $native -p:Platform=x64 -p:SelfContained=false --locked-mode @offlineRestore @compactProperties
 if ($LASTEXITCODE -ne 0) { throw 'Native restore failed.' }
-& $DotNet publish $native @compactProperties -c Release -p:Platform=x64 ("-p:OutputPath=bin-package-" + $version + "/") -p:DebugType=None -p:DebugSymbols=false --no-restore --self-contained true -o $app
+& $DotNet (Join-Path $root 'src/OpenRevo.Checks/bin/Release/net10.0-windows10.0.26100.0/OpenRevo.Checks.dll') --tray-lightweight-checks (Join-Path $evidence 'tray-lightweight-checks.json') (Join-Path $root 'src/Branding/App.ico')
+if ($LASTEXITCODE -ne 0) { throw 'Tray/icon checks failed.' }
+& $DotNet publish $native @compactProperties -c Release -p:Platform=x64 ("-p:OutputPath=bin-package-" + $version + ("-" + $Variant + "/")) -p:DebugType=None -p:DebugSymbols=false --no-restore --self-contained false -o $app
 if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
 foreach ($runtimeFile in @('coreclr.dll','hostfxr.dll','hostpolicy.dll','System.Private.CoreLib.dll')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $app $runtimeFile))) { throw ('Bundled .NET runtime missing: ' + $runtimeFile) }
+    if (Test-Path -LiteralPath (Join-Path $app $runtimeFile)) { throw ('Shared deployment unexpectedly bundles .NET: ' + $runtimeFile) }
 }
 if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
 & (Join-Path $root 'src/Branding/Assert-Icon.ps1') -PayloadDirectory $app
@@ -58,7 +60,7 @@ foreach ($required in @('OpenRevo.Native.exe','OpenRevo.Native.dll','OpenRevo.Co
 & (Join-Path $root 'packaging/Copy-Licenses.ps1') -PayloadDirectory $app
 Add-Type -AssemblyName System.IO.Compression
 & (Join-Path $root 'installer/build-filter.ps1')
-$zipPath = Join-Path $root ('native-source-' + $version + '.zip')
+$zipPath = Join-Path $root ('native-source-' + $version + '-' + $Variant + '.zip')
 $stream = [IO.File]::Open($zipPath, [IO.FileMode]::Create)
 $zip = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
 try {
@@ -69,9 +71,12 @@ try {
     $pendingDirectories.Push((Join-Path $root 'src'))
     while ($pendingDirectories.Count -gt 0) {
         $directory = $pendingDirectories.Pop()
-        foreach ($file in [IO.Directory]::EnumerateFiles($directory)) { $sourceFiles.Add($file) }
+        foreach ($file in [IO.Directory]::EnumerateFiles($directory)) {
+            if([IO.Path]::GetFileName($file) -eq 'OpenRevo-square-source.png'){continue}
+            $sourceFiles.Add($file)
+        }
         foreach ($child in [IO.Directory]::EnumerateDirectories($directory)) {
-            if ([IO.Path]::GetFileName($child) -match '^(bin(?:-[^/]+)?|obj|target|node_modules|Generated Files|\.git)$') { continue }
+            if ([IO.Path]::GetFileName($child) -match '^(OpenRevo\.Cpp|bin(?:-[^/]+)?|obj|target|node_modules|Generated Files|\.git)$') { continue }
             if (([IO.File]::GetAttributes($child) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw ('Source link is not allowed: ' + $child) }
             $pendingDirectories.Push($child)
         }
@@ -82,18 +87,24 @@ try {
         if ($name -match '^src/OpenRevo\.(Native|Core|Checks)/(bin(?:-[^/]+)?|obj)/' -or $name -match '/(target|node_modules|\.git)/') { continue }
         [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.FullName, $name) | Out-Null
     }
-    foreach ($name in @('packaging/Copy-Licenses.ps1','packaging/CompactPackage.targets','packaging/CompactRoots.xml','NATIVE-EXTENSIONS.md','PLUGIN-COMPATIBILITY-OPTIONS.md','RELIABILITY-FIXES.md','PANEL-SWITCH-AND-INSTALL.md','ORIGINAL-INSTALLER-BROWSER.md','PACKAGE-OPTIMIZATION.md','LICENSE','build.ps1','installer.iss','InstallerDirectoryPicker.iss','installer/FolderFilter.cpp','installer/FolderFilter.def','installer/build-filter.ps1','installer/InstallerFolderFilter.dll','legacy-files.iss','INSTALL-NOTES.txt','SCOPE.md','README.md','CORE-INTEGRATION.md','DIAGNOSTICS.md','TUNING-INTEGRATION.md','TUNING-PRESETS.md','DESKTOP-SERVICES.md','SETTINGS-AND-TRAY.md','UI-FUNCTION-MAP.md','PAWNIO-FEASIBILITY.md','RESPONSIVE-OPTIONS.md',('RELEASE-' + $version + '.md'))) {
+    foreach ($name in @('packaging/Copy-Licenses.ps1','packaging/CompactPackage.targets','packaging/CompactRoots.xml','NATIVE-EXTENSIONS.md','PLUGIN-COMPATIBILITY-OPTIONS.md','RELIABILITY-FIXES.md','PANEL-SWITCH-AND-INSTALL.md','ORIGINAL-INSTALLER-BROWSER.md','PACKAGE-OPTIMIZATION.md','LICENSE','build.ps1','installer.iss','InstallerDirectoryPicker.iss','RuntimePrerequisite.iss','installer/RuntimePrerequisiteChecks.iss','SHARED-RUNTIME-INSTALL.md','installer/FolderFilter.cpp','installer/FolderFilter.def','installer/build-filter.ps1','installer/InstallerFolderFilter.dll','legacy-files.iss','INSTALL-NOTES.txt','SCOPE.md','README.md','CORE-INTEGRATION.md','DIAGNOSTICS.md','TUNING-INTEGRATION.md','TUNING-PRESETS.md','DESKTOP-SERVICES.md','SETTINGS-AND-TRAY.md','UI-FUNCTION-MAP.md','PAWNIO-FEASIBILITY.md','RESPONSIVE-OPTIONS.md',('RELEASE-' + $version + '.md'))) {
         [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $root $name), $name) | Out-Null
     }
 } finally { $zip.Dispose(); $stream.Dispose() }
 $installerOptions = @()
 if ($Compact) { $installerOptions = @('/DCompactPackage=1') }
+$installerOptions += @(('/DAppPayloadDir=' + [IO.Path]::GetFileName($app)),('/DSourceZipName=' + [IO.Path]::GetFileName($zipPath)),('/DOutputName=Open-Revo-' + $version + '-' + $Variant + '-Setup-x64'))
 & $Iscc @installerOptions /Q ("/DAppVersion=" + $version) (Join-Path $root 'installer.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Installer compile failed.' }
-$setup = Join-Path (Split-Path -Parent $root) ('Open-Revo-' + $version + '-Setup-x64.exe')
+$setup = Join-Path (Split-Path -Parent $root) ('Open-Revo-' + $version + '-' + $Variant + '-Setup-x64.exe')
 & (Join-Path $root 'src/Branding/Assert-EmbeddedIcon.ps1') -Executable $setup
 Get-FileHash -LiteralPath $setup -Algorithm SHA256 | ForEach-Object { $_.Hash + '  ' + [IO.Path]::GetFileName($_.Path) } | Set-Content -LiteralPath ($setup + '.sha256') -Encoding ascii
 
 Get-FileHash -LiteralPath $zipPath -Algorithm SHA256 | ForEach-Object { $_.Hash + '  ' + [IO.Path]::GetFileName($_.Path) } | Set-Content -LiteralPath ($zipPath + '.sha256') -Encoding ascii
+
+
+
+
+
 
 

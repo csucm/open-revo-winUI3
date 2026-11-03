@@ -9,14 +9,14 @@ public sealed partial class MainWindow
     // Copy and icon IDs from the fixed React GpuModeCards. Both panels use this table.
     private static readonly (int Mode,string Title,string Icon,string Chip,string Description)[] originalGpuModes =
     [
-        (3,"独显直连","zap","dGPU","独立显卡物理直连内置屏幕。避开核显中转，发挥极致电竞帧率与超低延迟。"),
-        (2,"混合输出","layers","HYBRID","轻载时核显输出以省电静音，高负载 3D 图形与游戏时自动介入独显加速。"),
-        (1,"核显模式","power-off","iGPU","彻底切断独立显卡 PCIe 供电与待机功耗，极致降低整机能耗与发热，极大提升续航。")
+        (3,"独显直连","zap","dGPU","独显直接驱动内屏，减少画面中转。适合接电游戏，功耗通常更高。"),
+        (2,"混合输出","layers","HYBRID","轻载由核显输出，游戏和图形应用可调用独显渲染。兼顾续航和性能。"),
+        (1,"核显模式","power-off","iGPU","由集成显卡驱动内屏。适合办公、浏览和电池供电。")
     ];
     private static string OriginalGpuName(int mode)=>originalGpuModes.FirstOrDefault(m=>m.Mode==mode).Title??"待读取";
     private static FrameworkElement OriginalDeviceGraphic(string name,double size=18)
     {
-        var icon=NavigationOriginalIcon("device-"+name);icon.Width=size;icon.Height=size;return icon;
+        return ApprovedIcons.Create(name switch{"plug"=>"charging","sun"=>"brightness","power-off"=>"gpu-integrated","layers"=>"gpu-hybrid","zap"=>"gpu-discrete","battery"=>"battery","keyboard"=>"keyboard","power"=>"power",_=>"lighting"},size);
     }
     private static StackPanel OriginalIconLabel(string icon,string text,double size=12)
     {
@@ -25,15 +25,10 @@ public sealed partial class MainWindow
     }
     private Button OriginalGpuCard(int mode,string title,string icon,string chip,string description)
     {
-        var chipBody=Ui.Stack(OriginalDeviceGraphic(icon,16),Ui.Text(chip,12,true));chipBody.Spacing=2;
-        chipBody.HorizontalAlignment=HorizontalAlignment.Center;chipBody.VerticalAlignment=VerticalAlignment.Center;
-        var chipFrame=new Grid{Width=52,Height=52,HorizontalAlignment=HorizontalAlignment.Center};
-        chipFrame.Children.Add(new Rectangle{RadiusX=8,RadiusY=8,Stroke=(Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],StrokeThickness=2,StrokeDashArray=new DoubleCollection{3,2}});
-        chipFrame.Children.Add(chipBody);
-        var hint=Ui.Text(description,12,muted:true);hint.TextAlignment=TextAlignment.Center;hint.VerticalAlignment=VerticalAlignment.Center;hint.Margin=new Thickness(0,8,0,8);
-        var name=Ui.Text(title,14,true);name.TextAlignment=TextAlignment.Center;
-        var body=new Grid();body.RowDefinitions.Add(new(){Height=GridLength.Auto});body.RowDefinitions.Add(new(){Height=new GridLength(1,GridUnitType.Star)});body.RowDefinitions.Add(new(){Height=GridLength.Auto});
-        body.Children.Add(chipFrame);Grid.SetRow(hint,1);body.Children.Add(hint);Grid.SetRow(name,2);body.Children.Add(name);
+        var graphic=ApprovedIcons.Create(mode==1?"gpu-integrated":mode==2?"gpu-hybrid":"gpu-discrete",34);
+        var name=Ui.Text(title,14);name.TextAlignment=TextAlignment.Center;
+        var hint=Ui.Text(description,12,muted:true);hint.TextAlignment=TextAlignment.Center;
+        var body=Ui.Stack(graphic,name,hint);body.Spacing=8;graphic.HorizontalAlignment=HorizontalAlignment.Center;
         var button=Ui.Button(title,async(_,_)=>await RunGpuRequest(mode));button.Content=body;button.Tag="detail-choice";
         button.MinHeight=175;button.Padding=new Thickness(14,12,14,12);button.CornerRadius=new CornerRadius(10);
         // A shared row slot is insufficient if a Button keeps Center alignment.

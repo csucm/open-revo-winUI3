@@ -13,7 +13,7 @@ public sealed partial class MainWindow
         if (extensionHost != null) return;
         extensionHost = new NativeExtensionHost(Path.Combine(AppData.DirectoryPath, "extensions"), destination =>
         {
-            var target = navigation.MenuItems.OfType<NavigationViewItem>().First(i => Equals(i.Tag, destination));
+            var target = navigation.MenuItems.OfType<PaintNavItem>().First(i => Equals(i.Tag, destination));
             navigation.SelectedItem = target;
         });
         summaryExtension = extensionHost.Register("builtin-system-summary", 1);
@@ -74,15 +74,16 @@ public sealed partial class MainWindow
                 feedback.Text = "保存失败，原配置保留。重新进入本页后重试：" + error.Message;
             }
         };
-        body.Children.Add(toggle); body.Children.Add(summary); body.Children.Add(open); body.Children.Add(feedback);
+        body.Children.Add(SuiteSettingRow("启用状态摘要","关闭后释放状态订阅。",toggle));body.Children.Add(SuiteSettingRow("状态摘要","",summary));body.Children.Add(SuiteSettingRow("打开状态总览","复用现有状态，不增加采样线程",open));body.Children.Add(feedback);body.Spacing=0;
         body.Loaded += (_, _) => { loaded = true; Subscribe(); };
         body.Unloaded += (_, _) => { loaded = false; subscription?.Dispose(); subscription = null; };
-        page.Children.Add(DetailSection("原生扩展", body, "内置状态摘要 · 查看实时状态，快速进入总览。"));
-        page.Children.Add(DetailSection("扩展能力", Ui.Stack(
-            Ui.Text($"接口 {capabilities.Api.Major}.{capabilities.Api.Minor} · 原生组件", 14, true),
-            Ui.Text("支持状态订阅、页面跳转和独立配置保存。硬件控制暂未向扩展开放。", 12, muted: true))));
-        page.Children.Add(DetailSection("网页插件兼容", Ui.Text("有具体旧网页插件需求时，再增加可选兼容组件。旧版 HTML、CSS 和 JavaScript 插件目前无法直接运行；插件市场尚未接入。", 12, muted: true)));
+        page.Children.Add(DetailSection("内置状态摘要", body));
+        page.Children.Add(DetailGrid(DetailSection("原生扩展能力",SuiteVisuals.Stack(0,
+            SuiteSettingRow("状态订阅","面板与扩展共享状态。",Ui.Text("已提供",12,muted:true)),
+            SuiteSettingRow("页面跳转与配置保存","独立配置；失败保留旧文件。",Ui.Text("已提供",12,muted:true)),
+            SuiteSettingRow("硬件控制","暂未向扩展开放。",Ui.Text("未开放",12,muted:true)))),
+            DetailSection("网页插件兼容",SuiteVisuals.Stack(0,
+            SuiteSettingRow("旧网页插件","HTML / CSS / JavaScript 插件当前不能直接运行。",Ui.Text("未接入",12,muted:true)),
+            SuiteSettingRow("插件市场","不展示安装入口或假列表。",Ui.Text("未接入",12,muted:true))))));
     }
 }
-
-

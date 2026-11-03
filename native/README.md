@@ -1,6 +1,6 @@
-# Open-Revo 0.9.4 原生面板
+# Open-Revo 0.9.8 原生面板
 
-运行上一层 `Open-Revo-0.9.4-Setup-x64.exe` 安装或升级。使用WinUI 3，后续开发版已内置.NET 10 x64运行时，仍依赖Windows App Runtime 2.5+；历史0.9.6安装器仍需共享.NET。主程序整体管理员运行，手动启动可有一次Windows授权；普通显卡保存复用现有权限。说明与限制见[RELEASE-0.9.4.md](RELEASE-0.9.4.md)。
+运行上一层 `Open-Revo-0.9.8-shared-Setup-x64.exe` 安装或升级。当前使用 WinUI 3 窗口和按已确认设计重写的自绘控件，不启动 WebView2 网页宿主。采用共享 .NET 10 x64 Desktop Runtime，安装器提供依赖检测与下载引导；Windows App Runtime 2.5+ 仍为独立依赖。主程序整体管理员运行，手动启动可有一次 Windows 授权。说明与限制见 [RELEASE-0.9.8.md](RELEASE-0.9.8.md)。
 
 大面板总览按参考重排并修复缩放居中，性能自定义采用CPU/GPU并排、风扇在下方的独立子页，支持原版内置方案及管理工具栏。快捷开关和按需监测复用受限Core桥接，显示CPU功耗、显存占用与实际显存时钟；OSD原生提示可关闭。一键强冷位于总览底部快捷区。PawnIO仅做可行性验证，没有接入或安装。
 

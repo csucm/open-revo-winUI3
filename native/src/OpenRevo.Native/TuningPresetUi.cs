@@ -15,14 +15,14 @@ public sealed partial class MainWindow
     private void InitializeTuningPresets(JsonElement originals,TuningSnapshot state)
     {
         var defaults=originals.EnumerateArray().Select(p=>TuningPresetStore.FromOriginal(p,state,true)).ToArray();
-        tuningBuiltinDefaults=defaults;tuningPresets.Clear();tuningPresets.AddRange(tuningPresetStore.Load(defaults,state));tuningPresetId=null;
+        tuningBuiltinDefaults=defaults;tuningPresets.Clear();tuningPresets.AddRange(tuningPresetStore.Load(defaults,state));tuningPresetId=AppData.Load().SelectedTuningPreset;
     }
     private void RememberPresetDraft()
     {
         int index=tuningPresets.FindIndex(p=>p.Id==tuningPresetId);
         if(index>=0&&tuningDraft!=null)tuningPresets[index]=tuningPresets[index] with{Profile=tuningDraft.Copy()};
     }
-    private void RefreshTuningPanel(){if(!closed&&tuningPanel!=null)FillTuningEditor(tuningPanel);}
+    private void RefreshTuningPanel(){if(!uiReviewMode)AppData.Update(p=>p with{SelectedTuningPreset=tuningPresetId});if(!closed&&tuningPanel!=null)FillTuningEditor(tuningPanel);}
     private async Task<string?> AskPresetName(string title,string initial)
     {
         var input=new TextBox{Text=initial,MaxLength=12,PlaceholderText="1–12个字符"};
@@ -35,15 +35,15 @@ public sealed partial class MainWindow
         choice.SelectionChanged+=(_,_)=>
         {
             if(tuningApplying||choice.SelectedItem is not TuningPreset selected)return;
-            RememberPresetDraft();tuningPresetId=selected.Id;tuningDraft=selected.Profile.Copy();tuningStatus="已载入“"+selected.Name+"”，尚未应用。";RefreshTuningPanel();
+            RememberPresetDraft();tuningPresetId=selected.Id;if(!uiReviewMode)AppData.Update(p=>p with{SelectedTuningPreset=selected.Id});tuningDraft=selected.Profile.Copy();tuningStatus="已载入“"+selected.Name+"”，尚未应用。";RefreshTuningPanel();
         };
         var leading=new Grid{ColumnSpacing=10,VerticalAlignment=VerticalAlignment.Center};leading.ColumnDefinitions.Add(new(){Width=GridLength.Auto});leading.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});
-        var icon=SemanticGraphic(SelectedTuningPreset?.Icon??"tuning",24);leading.Children.Add(icon);Grid.SetColumn(choice,1);leading.Children.Add(choice);
-        var tools=new StackPanel{Orientation=Orientation.Horizontal,Spacing=4};
+        
+        var tools=new SuiteWrapPanel();
         Button Tool(string glyph,string title,Func<Task> action,bool enabled=true)
         {
             var button=Ui.Button(title,async(_,_)=>{try{await action();}catch(Exception error){if(!closed)await ShowMessage("方案操作未完成",error.Message);}});
-            button.Content=DetailIcon(glyph,16);button.Padding=new Thickness(8);button.Width=36;button.Height=36;button.IsEnabled=enabled;ToolTipService.SetToolTip(button,title);tools.Children.Add(button);return button;
+            button.Content=title switch{"新建方案（复制当前草稿）"=>"新建","保存当前方案"=>"保存","恢复当前内置方案"=>"恢复内置","重命名方案"=>"重命名","导入 JSON 方案"=>"导入","导出 JSON 方案"=>"导出","打开方案文件夹"=>"打开目录","删除自定义方案"=>"删除",_=>title};button.Padding=new Thickness(12,6,12,6);button.MinHeight=34;button.IsEnabled=enabled;ToolTipService.SetToolTip(button,title);tools.Children.Add(button);return button;
         }
         TuningPreset DraftPreset()=>SelectedTuningPreset is{} p?p with{Profile=tuningDraft!.Copy()}:new("user_"+Guid.NewGuid().ToString("N"),"新方案","star",false,tuningDraft!.Copy(),[]);
         Tool("\uE710","新建方案（复制当前草稿）",async()=>
@@ -81,7 +81,7 @@ public sealed partial class MainWindow
             if(await dialog.ShowAsync()!=ContentDialogResult.Primary)return;
             tuningPresetStore.Delete(selected);tuningPresets.RemoveAll(p=>p.Id==selected.Id);tuningPresetId=null;tuningStatus="方案已删除，当前草稿保留。";RefreshTuningPanel();
         },SelectedTuningPreset?.BuiltIn==false);
-        var row=DesktopAlignedRow(leading,tools);var card=Ui.Card(row);card.Padding=new Thickness(12);return new ContentControl{Content=card,HorizontalContentAlignment=HorizontalAlignment.Stretch};
+        var body=SuiteVisuals.Stack(0,SuiteSettingRow("当前方案","选择方案仅载入草稿。",choice),SuiteVisuals.Rule(tools));return new ContentControl{Content=DetailSection("方案与草稿",body),HorizontalContentAlignment=HorizontalAlignment.Stretch};
     }
     private async Task SaveJsonFile(string name,string content)
     {

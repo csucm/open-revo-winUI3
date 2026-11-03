@@ -8,6 +8,8 @@ public partial class App : Application
     private Mutex? instance;
     public App()
     {
+        if(Environment.GetCommandLineArgs().Any(a=>a is "--approved-ui-review" or "--painted-ui-review"))
+            Environment.SetEnvironmentVariable("OPENREVO_NATIVE_TEST_DATA_DIR",Path.Combine(AppContext.BaseDirectory,"data"));
         UnhandledException += (_, e) => SaveFailure(e.Exception);
 #if DESIGN_REVIEW_HOST
         Environment.SetEnvironmentVariable("OPENREVO_NATIVE_TEST_DATA_DIR",Path.Combine(AppContext.BaseDirectory,"data"));
@@ -19,6 +21,9 @@ public partial class App : Application
         TaskScheduler.UnobservedTaskException+=(_,e)=>OpenRevo.Core.DiagnosticLog.Failure("task.unobserved",e.Exception);
         AppDomain.CurrentDomain.ProcessExit+=(_,_)=>OpenRevo.Core.DiagnosticLog.Record("process.exiting",new{exitCode=Environment.ExitCode});
         InitializeComponent();
+#if !DESIGN_REVIEW_HOST
+        WindowBrandIcon.SetProcessIdentity();
+#endif
 
     }
     internal static bool IsAdmissionReview =>
@@ -88,12 +93,12 @@ public partial class App : Application
         }
         // Only the developer's read-only UI review may coexist with the console.
         // Explicit live hardware checks retain the production singleton.
-        bool readOnlyReview=command.Length==2&&command[1] is "--ui-checks" or "--ui-layout-checks" or "--ui-window-checks" or "--ui-replica-checks" or "--ui-settings-checks" or "--ui-theme-restore-checks" or "--ui-design-checks";
+        bool readOnlyReview=command.Length==2&&command[1] is "--ui-checks" or "--ui-layout-checks" or "--ui-window-checks" or "--ui-replica-checks" or "--ui-settings-checks" or "--ui-theme-restore-checks" or "--ui-design-checks" or "--approved-ui-review" or "--painted-ui-review";
         instance = new Mutex(true, readOnlyReview?@"Local\OpenRevo.Native.ReadOnlyReview":@"Local\OpenRevo.Native.InstalledPreview", out bool first);
         if (!first) {if(!readOnlyReview&&!command.Contains("--startup"))MainWindow.WakeExistingInstance();Exit(); return; }
         try
         {
-            window = new MainWindow(command.Length==2&&command[1] is "--ui-checks" or "--ui-layout-checks" or "--ui-window-checks" or "--ui-replica-checks" or "--ui-settings-checks" or "--ui-theme-restore-checks" or "--ui-design-checks" or "--ui-camera-checks" or "--ui-brightness-checks" or "--ui-win-checks" or "--ui-gpu-checks",command.Length==2&&command[1] is "--review-details" or "--ui-window-checks" or "--ui-replica-checks" or "--ui-settings-checks" or "--ui-theme-restore-checks" or "--ui-design-checks");
+            window = new MainWindow(command.Length==2&&command[1] is "--ui-checks" or "--ui-layout-checks" or "--ui-window-checks" or "--ui-replica-checks" or "--ui-settings-checks" or "--ui-theme-restore-checks" or "--ui-design-checks" or "--approved-ui-review" or "--painted-ui-review" or "--ui-camera-checks" or "--ui-brightness-checks" or "--ui-win-checks" or "--ui-gpu-checks",command.Length==2&&command[1] is "--review-details" or "--ui-window-checks" or "--ui-replica-checks" or "--ui-settings-checks" or "--ui-theme-restore-checks" or "--ui-design-checks" or "--approved-ui-review" or "--painted-ui-review");
             if(IsPanelShapeReview)window.StartPanelShapeReview();
             else {window.Activate();if(command.Contains("--startup"))window.StartHiddenToTray();}
         }
@@ -113,3 +118,4 @@ public partial class App : Application
         catch { /* Preserve the original failure if this folder is read-only. */ }
     }
 }
+

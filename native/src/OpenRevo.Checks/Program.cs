@@ -1,6 +1,8 @@
 using OpenRevo.Core;
 using OpenRevo.Core.Hal;
 using System.Text.Json;
+if(args.Length==2&&args[0]=="--panel-continuity-checks"){PanelContinuityChecks.Run(args[1]);return;}
+if(args.Length==3&&args[0]=="--tray-lightweight-checks"){await TrayLightweightChecks.Run(args[1],args[2]);return;}
 if(args.Length==2&&args[0]=="--native-extension-checks"){NativeExtensionChecks.Run(args[1]);return;}
 if(args.Length==2&&args[0]=="--preference-persistence-checks"){PreferencePersistenceChecks.Run(args[1]);return;}
 if(args.Length==2&&args[0]=="--update-checks"){await UpdateChecks.Run(args[1]);return;}
@@ -1071,4 +1073,5 @@ sealed class FakePower : IPowerPlans
     public IReadOnlyList<PowerPlan> List() => [new(A, "A"), new(B, "B")];
     public void Set(Guid id) { Writes++; if (!IgnoreWrites) Current = id; }
 }
+
 

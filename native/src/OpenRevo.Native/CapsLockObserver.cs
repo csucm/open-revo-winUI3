@@ -75,7 +75,7 @@ public sealed partial class MainWindow
         capsLockObserver=new(locked=>DispatcherQueue.TryEnqueue(()=>
         {
             if(closed||exitRequested||!osdEnabled)return;
-            nativeOsd??=new NativeOsd(DispatcherQueue);nativeOsd.Configure(systemPreferences);nativeOsd.ShowFeature("caps_lock",locked?"1":"0");
+            PresentOsd(OsdMessage.FromFeature("caps_lock",locked?"1":"0"));
         }));
         if(!capsLockObserver.Installed)actions.Add("Caps提示未启动："+capsLockObserver.Failure);
     }

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><title>显卡模式</title><rect width="24" height="24" rx="8" fill="#E5E4F4"/><g transform="translate(3.0 3.0) scale(0.75)" fill="none" stroke="#6556C7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path xmlns="http://www.w3.org/2000/svg" d="M2 17h18a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H2" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M2 21V3" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M7 17v3a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-3" />
+  <circle xmlns="http://www.w3.org/2000/svg" cx="16" cy="11" r="2" />
+  <circle xmlns="http://www.w3.org/2000/svg" cx="8" cy="11" r="2" />
+</g></svg>

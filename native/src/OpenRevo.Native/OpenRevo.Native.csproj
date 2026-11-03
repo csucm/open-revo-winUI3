@@ -10,12 +10,13 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <UseWinUI>true</UseWinUI><WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
-    <SelfContained>true</SelfContained>
+    <SelfContained>false</SelfContained>
+    <RollForward>LatestPatch</RollForward>
     <EnableWinAppRunSupport>false</EnableWinAppRunSupport><WinUISDKReferences>false</WinUISDKReferences>
     <DefaultItemExcludes>$(DefaultItemExcludes);bin*/**;obj/**</DefaultItemExcludes>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <PublishTrimmed>false</PublishTrimmed><PublishReadyToRun>false</PublishReadyToRun>
-    <Version>0.9.7</Version><Description>Open-Revo native control panel</Description>
+    <Version>0.9.8</Version><Description>Open-Revo native control panel</Description>
     <Title>Open-Revo</Title><Product>Open-Revo</Product><Company>Open-Revo Community</Company>
   </PropertyGroup>
   <PropertyGroup Condition="'$(DesignReviewHost)'=='true'">
@@ -46,6 +47,7 @@
     <ProjectReference Include="../OpenRevo.Core/OpenRevo.Core.csproj" />
     <Content Include="App.ico" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Assets/**/*.svg" CopyToOutputDirectory="PreserveNewest" />
+    <Content Update="Assets/Approved/LUCIDE-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Update="Assets/Nav/LUCIDE-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
 
   </ItemGroup>
@@ -54,4 +56,5 @@
     <Copy SourceFiles="$(TargetDir)App.xbf;$(TargetDir)$(AssemblyName).pri" DestinationFolder="$(PublishDir)" />
   </Target>
 </Project>
+
 

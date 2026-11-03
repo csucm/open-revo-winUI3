@@ -9,6 +9,8 @@ internal sealed class DesktopTiles : Panel
 {
     internal int PreferredColumns{get;init;}=2;
     internal double MinimumItemWidth{get;init;}=340;
+    internal double ViewportBreakpoint{get;init;}
+    internal double SingleColumnBelow{get;init;}
     internal bool PairFourColumns{get;init;}
     internal bool QuickSwitchColumns{get;init;}
     internal int Columns{get;private set;}=1;
@@ -22,6 +24,7 @@ internal sealed class DesktopTiles : Panel
     internal static void SetFullRow(UIElement child)=>child.SetValue(FullRowProperty,true);
     private int PickColumns(double width)
     {
+        if(SingleColumnBelow>0&&width<=SingleColumnBelow||ViewportBreakpoint>0&&XamlRoot is {} surface&&surface.Size.Width<=ViewportBreakpoint)return 1;
         return DesktopGridGeometry.Columns(width,PreferredColumns,MinimumItemWidth,ColumnSpacing,PairFourColumns,QuickSwitchColumns);
     }
     protected override Size MeasureOverride(Size available)

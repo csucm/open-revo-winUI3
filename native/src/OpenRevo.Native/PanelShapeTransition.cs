@@ -44,6 +44,7 @@ public sealed partial class MainWindow
         catch (Exception error) { DiagnosticLog.Failure("window.shape_commit", error); }
         finally
         {
+            if(!closed)ResetCaptionHover();
             panelCompositionGuard?.Dispose(); panelCompositionGuard = null;
             lastPanelCloakMs=System.Diagnostics.Stopwatch.GetElapsedTime(panelCloakStarted).TotalMilliseconds;
             panelShapeChanging = false;
@@ -62,3 +63,4 @@ public sealed partial class MainWindow
         finally { CompositionTarget.Rendering -= handler; }
     }
 }
+

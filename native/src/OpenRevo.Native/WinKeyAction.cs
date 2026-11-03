@@ -33,7 +33,7 @@ public sealed partial class MainWindow
                 var result=await(winWriterOverride?.Invoke(target)??Task.Run(()=>hardware.SetWinKeyLocked(target)));
                 double hardwareMs=watch.Elapsed.TotalMilliseconds;
                 quickState=quickState with{WinLocked=result.WinKeyLocked};
-                if(requestedWinLocked==target)requestedWinLocked=null;
+                if(requestedWinLocked==target){requestedWinLocked=null;ConfirmShortcutOsd(8,result.WinKeyLocked?1u:0u);}
                 var timing=new WinUiTiming(target,queued,hardwareMs,System.Diagnostics.Stopwatch.GetElapsedTime(requested).TotalMilliseconds);
                 winUiTimings.Add(timing);if(winUiTimings.Count>16)winUiTimings.RemoveAt(0);
                 actions.Add(System.Text.Json.JsonSerializer.Serialize(new{at=DateTimeOffset.Now,operation="win-key-ui-confirmed",timing}));

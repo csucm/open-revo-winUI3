@@ -58,26 +58,25 @@ public sealed partial class MainWindow
         if(tuningBaseline is not{} state||tuningDraft==null){host.Children.Add(status);host.Children.Add(read);return;}
         var presetToolbar=TuningPresetToolbar(host,state);host.Children.Add(presetToolbar);
         if(SelectedTuningPreset is{} selected&&selected.Adjustments.Length>0)host.Children.Add(Ui.Text("本机适配："+string.Join("；",selected.Adjustments),11,muted:true));
-        host.Children.Add(status);
         var editors=new TuningSection{Spacing=12};
         bool syncing=false;
         void Changed(){if(!syncing){RememberPresetDraft();tuningStatus="草稿已修改，尚未应用。";status.Text=tuningStatus;}}
         ContentControl Number(string label,int value,int min,int max,string unit,Action<int> set,int step=1)
         {
-            var number=new NumberBox{Value=value,Minimum=min,Maximum=max,SmallChange=step,LargeChange=step*5,SpinButtonPlacementMode=NumberBoxSpinButtonPlacementMode.Compact,Width=112,FontSize=12};tuningNumbers.Add(number);
+            var number=new NumberBox{Value=value,Minimum=min,Maximum=max,SmallChange=step,LargeChange=step*5,SpinButtonPlacementMode=NumberBoxSpinButtonPlacementMode.Compact,Width=84,FontSize=14};tuningNumbers.Add(number);
             var slider=new Slider{Minimum=min,Maximum=max,StepFrequency=step,Value=value,MinHeight=26};bool linking=false;
             number.ValueChanged+=(_,e)=>{if(double.IsNaN(e.NewValue))return;if(!linking){linking=true;slider.Value=Math.Clamp(e.NewValue,min,max);linking=false;}if(!syncing){set((int)Math.Round(e.NewValue));Changed();}};
             slider.ValueChanged+=(_,_)=>{if(syncing||linking)return;linking=true;number.Value=slider.Value;linking=false;};
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(number,label+"（"+unit+"）");Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(slider,label+"滑块");
-            var title=Ui.Text(label+"（"+unit+"）",12,true);title.TextWrapping=TextWrapping.NoWrap;
-            var stack=Ui.Stack(DesktopAlignedRow(title,number,"tuning-number"),slider);stack.Spacing=0;
-            return new ContentControl{Content=stack,HorizontalContentAlignment=HorizontalAlignment.Stretch};
+            var title=Ui.Text(label,14);title.TextWrapping=TextWrapping.NoWrap;
+            var stack=SuiteVisuals.Stack(8,DesktopAlignedRow(title,SettingsControls(number,Ui.Text(unit,12,muted:true)),"tuning-number"),slider,Ui.Row(Ui.Text(min+" "+unit,12,muted:true),Ui.Text(max+" "+unit,12,muted:true)));
+            return new ContentControl{Content=SuiteVisuals.Rule(stack,14),HorizontalContentAlignment=HorizontalAlignment.Stretch};
         }
         FrameworkElement Toggle(string label,bool value,Action<bool> set)
         {
             var toggle=ServiceToggle(label,value,(_,_)=>{});
             toggle.Toggled+=(_,_)=>{if(!syncing){set(toggle.IsOn);Changed();}};
-            return DesktopAlignedRow(Ui.Text(label,12,true),toggle,"tuning-toggle");
+            return DesktopAlignedRow(Ui.Text(label,14),toggle,"tuning-toggle");
         }
         var p=tuningDraft;
         var cpu=Ui.Stack(
@@ -107,10 +106,10 @@ public sealed partial class MainWindow
             gpu=Ui.Stack(Ui.Text(caps.Name,11,muted:true),super,manual,clocks,Ui.Text(p.Offsets==null?"驱动未提供频率偏移读数。":"超级性能使用硬件最高功耗额度，并允许频率编辑。",11,muted:true));((StackPanel)gpu).Spacing=8;
         }
         else gpu=Ui.Text("未读到可确认的显卡能力。本次应用保留显卡参数。",12,muted:true);
-        var pair=TuningColumns(ReplicaCard("cpu","CPU 处理器",cpu),ReplicaCard("gpu","GPU 独立显卡",gpu));editors.Children.Add(pair);
+        var pair=TuningColumns(ReplicaCard("cpu","CPU 参数",cpu),ReplicaCard("gpu","GPU 参数",gpu));editors.Children.Add(pair);
         var curveGrid=TuningColumns(
-            ReplicaCard("cpu","CPU 风扇曲线",new FanCurveEditor(p.CpuCurve,v=>{tuningDraft=tuningDraft! with{CpuCurve=v};Changed();},tuningNumbers)),
-            ReplicaCard("gpu","GPU 风扇曲线",new FanCurveEditor(p.GpuCurve,v=>{tuningDraft=tuningDraft! with{GpuCurve=v};Changed();},tuningNumbers,true)));var curves=new ContentControl{Content=curveGrid,HorizontalContentAlignment=HorizontalAlignment.Stretch,IsEnabled=p.CustomFans};
+            CurvePanel("CPU 风扇曲线",new FanCurveEditor(p.CpuCurve,v=>{tuningDraft=tuningDraft! with{CpuCurve=v};Changed();},tuningNumbers)),
+            CurvePanel("GPU 风扇曲线",new FanCurveEditor(p.GpuCurve,v=>{tuningDraft=tuningDraft! with{GpuCurve=v};Changed();},tuningNumbers,true)));var curves=new ContentControl{Content=curveGrid,HorizontalContentAlignment=HorizontalAlignment.Stretch,IsEnabled=p.CustomFans};
         var step=Number("每级响应时间",p.FanStepMs,100,12700,"ms",v=>tuningDraft=tuningDraft! with{FanStepMs=v},100);step.IsEnabled=p.SmoothFans;
         var fanSwitch=Toggle("自定义风扇曲线",p.CustomFans,v=>{tuningDraft=tuningDraft! with{CustomFans=v};curves.IsEnabled=v;});
         var smooth=Toggle("平滑调速",p.SmoothFans,v=>{tuningDraft=tuningDraft! with{SmoothFans=v};step.IsEnabled=v;});
@@ -135,8 +134,9 @@ public sealed partial class MainWindow
             finally{tuningApplying=false;if(!closed&&ReferenceEquals(host,tuningPanel))FillTuningEditor(host);}
         },true);
         apply.IsEnabled=hardware.Active&&!tuningApplying;
-        var actions=DesktopAlignedRow(Ui.Text("选择、保存方案仅改草稿；点击应用后统一写入。",11,muted:true),apply);
-        host.Children.Add(DesktopAlignedRow(read,actions));host.Children.Add(editors);
+        host.Children.Add(editors);
+        var dock=Ui.Card(DesktopAlignedRow(status,SettingsControls(read,apply)));dock.Padding=new Thickness(16,12,16,12);dock.CornerRadius=new CornerRadius(12);
+        host.Children.Add(dock);
         editors.IsEnabled=presetToolbar.IsEnabled=!tuningApplying;
     }
     private static IEnumerable<NumberBox> DescendantNumbers(UIElement element)

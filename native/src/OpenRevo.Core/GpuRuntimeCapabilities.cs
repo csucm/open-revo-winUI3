@@ -12,10 +12,12 @@ public sealed record GpuRuntimeCapabilities(bool? HybridIgpuSupported,bool? Igpu
     {
         false=>"固件未提供混合/纯集显热切换接口；切换需重启",
         true when initialMode==3=>"已识别混合/纯集显热切换接口；本次以独显直连启动，切换仍需重启",
-        true=>"已识别混合/纯集显热切换接口，当前机型实际热切换尚未验证；暂保存后重启",
+        true=>"已识别混合/纯集显热切换接口，当前机型支持混合与核显路径热切换；实际结果以运行态回读为准",
         _=>"未能确认热切换能力；暂保存后重启"
     };
-    public static GpuRuntimeCapabilities Probe()
+    public static GpuRuntimeCapabilities Probe()=>Query(null,null);
+    internal static GpuRuntimeCapabilities Switch(bool expected,bool target)=>Query(expected,target);
+    private static GpuRuntimeCapabilities Query(bool? expected,bool? target)
     {
         if(Hal.HardwareSession.CheckMachineIdentity() is string blocked)return new(null,null,null,null,blocked);
         object? locator=null,service=null,rows=null,selected=null,signature=null,methods=null,method=null,cls=null;
@@ -51,6 +53,14 @@ public sealed record GpuRuntimeCapabilities(bool? HybridIgpuSupported,bool? Igpu
             }
             phase="support-query";ulong? support=Query(0x30000000003);
             phase="state-query";ulong? state=Query(0x30000000002);
+            if(target.HasValue)
+            {
+                if(Decode(support)!=true||Decode(state)!=expected)throw new IOException("热切换能力或当前状态未确认。");
+                string? writeBlocked=Hal.HardwareSession.CheckEnvironment();if(writeBlocked!=null)throw new IOException(writeBlocked);
+                if(target!=expected){phase="runtime-write";Query(target.Value?0x30000000001UL:0x30000000000UL);}
+                phase="runtime-readback";state=Query(0x30000000002);
+                if(Decode(state)!=target)throw new IOException("显卡运行态回读未确认；停止后续写入。");
+            }
             return new(Decode(support),Decode(state),support,state,null);
         }
         catch(Exception error){return new(null,null,null,null,$"{phase}: {error.GetType().Name} 0x{error.HResult:X8}: {error.Message}");}

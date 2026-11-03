@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace OpenRevo.Native;
 
-// Keep composing the same HWND while hiding intermediate layouts from DWM.
+// Suppress system transitions; cloak only non-animated layout preparation.
 internal sealed class PanelCompositionGuard : IDisposable
 {
     private readonly nint window;
@@ -10,7 +10,7 @@ internal sealed class PanelCompositionGuard : IDisposable
     private readonly bool transitionsChanged, cloakChanged;
     private bool disposed;
     internal bool Cloaked { get; }
-    internal PanelCompositionGuard(nint window)
+    internal PanelCompositionGuard(nint window,bool cloak=true)
     {
         this.window = window;
         if (GetAttribute(window, 3, out previousTransitions, 4) == 0)
@@ -21,10 +21,11 @@ internal sealed class PanelCompositionGuard : IDisposable
         if (GetAttribute(window, 14, out int cloaked, 4) == 0)
             previousAppCloak = (cloaked & 1) != 0 ? 1 : 0;
         int hide = 1;
-        Cloaked = SetAttribute(window, 13, ref hide, 4) == 0;
+        Cloaked = cloak && SetAttribute(window, 13, ref hide, 4) == 0;
         cloakChanged = Cloaked && previousAppCloak == 0;
         if (Cloaked) Flush();
     }
+    internal void Reveal(){if(cloakChanged&&!disposed){int visible=0;SetAttribute(window,13,ref visible,4);}}
     public void Dispose()
     {
         if (disposed) return;
@@ -39,3 +40,4 @@ internal sealed class PanelCompositionGuard : IDisposable
     [DllImport("dwmapi.dll", EntryPoint="DwmFlush")]
     internal static extern int Flush();
 }
+

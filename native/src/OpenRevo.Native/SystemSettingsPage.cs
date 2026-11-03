@@ -26,10 +26,10 @@ public sealed partial class MainWindow
     }
     private async Task SaveSystemSettings(SystemPreferences next)
     {
-        if(uiReviewMode){systemPreferences=next;return;}
+        if(uiReviewMode){systemPreferences=next;MotionDesign.Configure(next.MotionSpeed);UpdateInlineOsdPreview();return;}
         bool changed=next.OsdTheme!=systemPreferences.OsdTheme||next.OsdScale!=systemPreferences.OsdScale||next.OsdPosition!=systemPreferences.OsdPosition;
-        next.Save();systemPreferences=next;hardware.SetBatteryPerformancePermission(next.UnlockBatteryLimit);nativeOsd?.Configure(next);
-        if(changed&&osdEnabled){nativeOsd??=new NativeOsd(DispatcherQueue);nativeOsd.Configure(next);nativeOsd.Show("Open-Revo","屏幕提示预览");}
+        next.Save();systemPreferences=next;MotionDesign.Configure(next.MotionSpeed);hardware.SetBatteryPerformancePermission(next.UnlockBatteryLimit);nativeOsd?.Configure(next);
+        if(changed)UpdateInlineOsdPreview();
         await Task.CompletedTask;
     }
     private async Task ConfigureDebugLog()
@@ -44,8 +44,15 @@ public sealed partial class MainWindow
     private void RenderSystemSettings()
     {
         var rows=Ui.Stack();rows.Spacing=8;
+        string Scope(string title)=>title.Contains("OSD")?"osdsettings":title.Contains("数据存储")?"storage":title.Contains("诊断")?"diagnostics":"settings";
         void Add(string glyph,string title,string detail,FrameworkElement control,double stackBelow=0)
-        {var row=DetailRow(glyph,title,detail,control,stackBelow);var inset=DetailInset(row);inset.Padding=new Thickness(14,8,14,8);rows.Children.Add(inset);}
+        {
+            if(Scope(title)!=currentPage)return;string original=title;
+            title=title switch{"迷你面板点击外部自动收起"=>"mini 点击外部收起","开机自动启动（最小化至托盘）"=>"开机自动启动","刷新间隔（秒）"=>"刷新间隔","OSD 屏幕提示"=>"OSD 屏幕悬浮提示","OSD 风格"=>"风格","OSD 大小"=>"大小","OSD 位置"=>"位置",_=>title};
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(control,detail);
+            var row=DetailRow("",title,ApprovedCopy.Description(currentPage,title,detail),control,stackBelow);var frame=SuiteVisuals.Rule(row);frame.Tag=original;rows.Children.Add(frame);
+        }
+
         ComboBox Choice(string name,string[] labels,int selected,Func<int,Task> changed,double width=150)
         {
             var box=new ComboBox{ItemsSource=labels,SelectedIndex=selected,Width=width};Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box,name);
@@ -56,12 +63,30 @@ public sealed partial class MainWindow
             var toggle=ServiceToggle(name,value,(_,_)=>{});bool syncing=false;
             toggle.Toggled+=async(_,_)=>{if(syncing)return;bool next=toggle.IsOn;try{await changed(next);}catch(Exception error){syncing=true;toggle.IsOn=!next;syncing=false;await ShowMessage("设置未完成",error.Message);}};return toggle;
         }
-        Add("\uE790","应用主题","保存到本机；重新启动和托盘唤醒后保持所选主题。",Choice("应用主题",["跟随 Windows","浅色 · Fluent","深色"],selectedTheme,ChangeApplicationTheme,180));
+        if(currentPage=="osdsettings")
+        {
         var osdStyle=Choice("OSD 风格",["电影字幕","向右羽化","磨砂胶囊"],Array.IndexOf(new[]{"cinema","fade","pill"},systemPreferences.OsdTheme),i=>SaveSystemSettings(systemPreferences with{OsdTheme=new[]{"cinema","fade","pill"}[i]}),125);
         var osdScale=Choice("OSD 大小",["80%","100%","120%","140%"],Array.IndexOf(new[]{80,100,120,140},systemPreferences.OsdScale),i=>SaveSystemSettings(systemPreferences with{OsdScale=new[]{80,100,120,140}[i]}),82);
         var osdPosition=Choice("OSD 位置",["左上角","下方中央","屏幕正中"],Array.IndexOf(new[]{"top-left","bottom-center","center"},systemPreferences.OsdPosition),i=>SaveSystemSettings(systemPreferences with{OsdPosition=new[]{"top-left","bottom-center","center"}[i]}),112);
-        var osdToggle=Switch("OSD 屏幕悬浮提示",osdEnabled,async on=>{osdEnabled=on;await SavePreferences();UpdateExtraSwitchButtons();if(!on)nativeOsd?.Hide();});
-        Add("\uE7F4","OSD 屏幕悬浮提示","性能与设备状态提示；风格、大小和位置立即用于下一次提示。",SettingsControls(osdStyle,osdScale,osdPosition,Ui.Button("预览",(_,_)=>{nativeOsd??=new NativeOsd(DispatcherQueue);nativeOsd.Configure(systemPreferences);nativeOsd.Show("Open-Revo","屏幕提示预览");}),osdToggle),1050);
+        var osdToggle=Switch("OSD 屏幕悬浮提示",osdEnabled,async on=>{osdEnabled=on;await SavePreferences();UpdateExtraSwitchButtons();if(!on)nativeOsd?.Hide();else ConfirmedActionOsd("屏幕提示 · 已开启","osd");UpdateInlineOsdPreview();});
+        Add("\uE7F4","OSD 屏幕提示","开启后提示设备与性能状态。",osdToggle);
+        Add("\uE7F4","OSD 风格","立即更新右侧预览。",osdStyle);
+        Add("\uE7F4","OSD 大小","按逻辑尺寸缩放。",osdScale);
+        Add("\uE7F4","OSD 位置","提示在屏幕中的位置。",osdPosition);
+
+            page.Children.Add(DetailGrid(DetailSection("屏幕提示选项",rows),OsdPreviewCard()));return;
+        }
+        if(currentPage=="storage")
+        {
+            var open=Ui.Button("打开目录",(_,_)=>OpenLocalFolder(AppData.DirectoryPath));var migrate=Ui.Button("迁移",async(_,_)=>await MigrateDataStorage());var clear=Ui.Button("清除",async(_,_)=>await ClearDataStorage());
+            page.Children.Add(DetailGrid(DetailSection("当前存储",SuiteVisuals.Stack(0,SuiteSettingRow("数据目录","",Ui.Text(AppData.DirectoryPath,12,muted:true)),SuiteSettingRow("打开目录","查看配置、方案和诊断文件。",open),SuiteSettingRow("迁移存储","复制并校验；原目录保留。",migrate))),DetailSection("备份保护与清理",SuiteVisuals.Stack(0,SuiteSettingRow("清除数据","备份到相邻目录后恢复默认。",clear),SuiteSettingRow("清理范围","不删除官方控制台数据，不自动改变硬件档位。",Ui.Text("仅本版本",12,muted:true))))));return;
+        }
+        if(currentPage=="diagnostics")
+        {
+            page.Children.Add(DetailSection("诊断报告",SuiteVisuals.Stack(0,SuiteSettingRow("导出范围","设备、能力、状态、配置摘要与脱敏日志。",Ui.Text("脱敏导出",12,muted:true)),SuiteSettingRow("打开默认目录","",Ui.Button("打开目录",(_,_)=>OpenLocalFolder(AppData.DiagnosticsPath))),SuiteSettingRow("选择位置并导出","取消不会留下不完整文件。",Ui.Button("导出",async(_,_)=>await Export())))));
+            if(debugSettingsVisible&&!debugSettingsHidden){var extra=Ui.Stack();RenderDebugSettings(extra,Choice,Switch);var items=extra.Children.ToArray();extra.Children.Clear();foreach(var item in items)page.Children.Add(item);}return;
+        }
+        Add("\uE790","应用主题","保存到本机；重新启动和托盘唤醒后保持所选主题。",Choice("应用主题",["跟随 Windows","浅色","深色"],selectedTheme,ChangeApplicationTheme,180));
         Add("\uE7E8","开机自动启动（最小化至托盘）","登录后启动后台控制；从托盘点击唤醒面板。",StartupCheckBox());
         var unlock=ServiceToggle("解除离电限制",systemPreferences.UnlockBatteryLimit,(_,_)=>{});bool unlocking=false;
         unlock.Toggled+=async(_,_)=>
@@ -80,9 +105,7 @@ public sealed partial class MainWindow
         Add("\uE73F","迷你面板点击外部自动收起","仅迷你模式失去焦点时收回托盘，完整面板不受影响。",Switch("迷你面板自动收起",systemPreferences.MiniAutoHide,on=>SaveSystemSettings(systemPreferences with{MiniAutoHide=on})));
         Add("\uE7F8","硬件接管",(hardware.Active?"已接管":"未接管")+" · "+CoreMachine.Current.Reason+"。关闭后停止控制；重新打开会核验并接管。",TakeoverSwitch());
         Add("\uE823","刷新间隔（秒）","面板隐藏后暂停界面采样；后台睡眠和供电策略继续运行。",Choice("刷新间隔",["2 秒","5 秒","10 秒"],Array.IndexOf(new[]{2,5,10},interval),async i=>{interval=new[]{2,5,10}[i];timer.Interval=TimeSpan.FromSeconds(interval);await SavePreferences();},112));
-        var dataActions=SettingsControls(Ui.Button("打开目录",(_,_)=>OpenLocalFolder(AppData.DirectoryPath)),Ui.Button("迁移存储",async(_,_)=>await MigrateDataStorage()),Ui.Button("清除数据",async(_,_)=>await ClearDataStorage()));
-        Add("\uEDA2","数据存储管理",dataMigrationTarget==null?"当前目录："+AppData.DirectoryPath:"已复制至："+dataMigrationTarget+"；下次完整退出并启动后使用。",dataActions,850);
-        rows.Children.Add(UpdateControls());
+
         var planChoice=new ComboBox{Width=180,MinHeight=36,Height=36,VerticalContentAlignment=VerticalAlignment.Center};bool syncingPlans=false;
         async Task ReadPlans()
         {
@@ -107,13 +130,21 @@ public sealed partial class MainWindow
         var refreshPlans=Ui.Button("刷新",async(_,_)=>await ReadPlans());
         foreach(var button in new[]{resetPlans,refreshPlans}){button.MinHeight=36;button.Height=36;button.VerticalContentAlignment=VerticalAlignment.Center;}
         var planControls=SettingsControls(resetPlans,planChoice,refreshPlans);planControls.Tag="power-plan-controls";
-        Add("\uE945","Windows 基础电源方案","保留自建方案，可独立于硬件性能档位切换；修复前自动备份。",planControls,980);_=ReadPlans();
-        Add("\uE9F9","导出诊断","可选择保存位置。默认诊断目录："+AppData.DiagnosticsPath,SettingsControls(Ui.Button("打开默认目录",(_,_)=>OpenLocalFolder(AppData.DiagnosticsPath)),Ui.Button("选择位置并导出",async(_,_)=>await Export())),980);
+        Add("\uE945","Windows 基础电源方案","保留自建方案，可独立于硬件性能档位切换；修复前自动备份。",planControls,980);if(currentPage=="settings")_=ReadPlans();
         Add("\uE713","后台与托盘","关闭或最小化面板后继续运行；点击托盘图标唤醒，右键菜单退出。",Ui.Button("退出程序",async(_,_)=>await ExitFromTray()));
-        if(debugSettingsVisible&&!debugSettingsHidden)RenderDebugSettings(rows,Choice,Switch);
-        page.Children.Add(ReplicaCard("settings","系统功能",rows));
-        page.Children.Add(Ui.Text("Open-Revo 原生控制台 · 基于 faintonce/open-revo / openrevo-core · GPL-3.0-or-later",11,muted:true));
+        if(currentPage=="diagnostics"&&debugSettingsVisible&&!debugSettingsHidden)RenderDebugSettings(rows,Choice,Switch);
+        var groups=rows.Children.Cast<FrameworkElement>().ToArray();rows.Children.Clear();
+        FrameworkElement[] Pick(params string[] titles)=>groups.Where(g=>g.Tag is string key&&titles.Contains(key)).ToArray();
+        var appearance=Ui.Stack(Pick("应用主题","唤醒面板形态","迷你面板点击外部自动收起").Cast<UIElement>().ToArray());appearance.Spacing=0;appearance.Children.Add(SubpageLink("osdsettings","OSD 屏幕提示","风格、大小、位置与预览"));
+        var runtime=Ui.Stack(Pick("开机自动启动（最小化至托盘）","硬件接管","刷新间隔（秒）","解除离电限制").Cast<UIElement>().ToArray());runtime.Spacing=0;
+        planControls.Children.Clear();
+        var plans=SuiteVisuals.Stack(0,SuiteSettingRow("当前方案","列表以系统实际枚举为准。",planChoice),SuiteSettingRow("刷新列表","",refreshPlans),SuiteSettingRow("修复 / 重置计划","先备份，再重建内置计划。",resetPlans));
+        var trayButton=Ui.Button("查看菜单",(_,_)=>TrayMenu());var exit=Ui.Button("退出",async(_,_)=>await ExitFromTray());
+        var data=SuiteVisuals.Stack(0,SubpageLink("storage","数据存储管理","打开目录、迁移与清除"),SubpageLink("diagnostics","诊断与日志","导出诊断、额外调试日志"),SuiteSettingRow("后台与托盘","关闭窗口后继续运行。",trayButton),SuiteSettingRow("退出程序","退出后释放防休眠状态。",exit));
+        page.Children.Add(DetailGrid(DetailSection("外观与面板",appearance),DetailSection("运行与设备",runtime),DetailSection("Windows 基础电源方案",plans),DetailSection("数据与诊断",data)));
+        page.Children.Add(DetailSection("关于 Open-Revo",SuiteSettingRow("开源许可","基于 faintonce/open-revo / openrevo-core",Ui.Text("GPL-3.0-or-later",12,muted:true))));
     }
+
     private static void OpenLocalFolder(string directory)
     {Directory.CreateDirectory(directory);var info=new ProcessStartInfo("explorer.exe"){UseShellExecute=true};info.ArgumentList.Add(directory);Process.Start(info);}
     private async Task MigrateDataStorage()

@@ -70,16 +70,18 @@ internal sealed class OsdGlassBackdrop : SystemBackdrop
             target.SystemBackdrop=source.Compositor.CreateColorBrush(Microsoft.UI.Colors.Transparent);
         }
     }
-    internal void Animate(bool leaving,bool enabled,double scale,double dpi)
+    internal void Animate(bool leaving,bool enabled,double scale,double dpi,bool fresh=false)
     {
         if(shape==null||white==null)return;
-        shape.StopAnimation("Offset");white.StopAnimation("Color");
-        if(!enabled){shape.Offset=new(left,top);white.Color=Windows.UI.Color.FromArgb(leaving?(byte)0:(byte)255,255,255,255);return;}
-        var compositor=white.Compositor;var easing=compositor.CreateCubicBezierEasingFunction(new(.16f,1),new(.3f,1));
-        var position=compositor.CreateVector2KeyFrameAnimation();position.Duration=TimeSpan.FromMilliseconds(220);
-        position.InsertKeyFrame(0,new(left,top+(leaving?0:(float)(-8*scale*dpi))));position.InsertKeyFrame(1,new(left,top+(leaving?(float)(-8*scale*dpi):0)),easing);shape.StartAnimation("Offset",position);
-        var fade=compositor.CreateColorKeyFrameAnimation();fade.Duration=TimeSpan.FromMilliseconds(220);
-        fade.InsertKeyFrame(0,Windows.UI.Color.FromArgb(leaving?(byte)255:(byte)0,255,255,255));fade.InsertKeyFrame(1,Windows.UI.Color.FromArgb(leaving?(byte)0:(byte)255,255,255,255),easing);white.StartAnimation("Color",fade);
+        if(!enabled){Hold();white.Color=Windows.UI.Color.FromArgb(leaving?(byte)0:(byte)255,255,255,255);return;}
+        var compositor=white.Compositor;var easing=MotionDesign.Easing(compositor,leaving);
+        var duration=TimeSpan.FromMilliseconds(leaving?MotionDesign.Exit:MotionDesign.Enter);
+        var position=compositor.CreateVector2KeyFrameAnimation();position.Duration=duration;position.StopBehavior=Windows.UI.Composition.AnimationStopBehavior.LeaveCurrentValue;
+        if(fresh&&!leaving)position.InsertKeyFrame(0,new(left,top+(float)(6*scale*dpi)));
+        position.InsertKeyFrame(1,new(left,top+(leaving?(float)(-6*scale*dpi):0)),easing);shape.StartAnimation("Offset",position);
+        var fade=compositor.CreateColorKeyFrameAnimation();fade.Duration=duration;fade.StopBehavior=Windows.UI.Composition.AnimationStopBehavior.LeaveCurrentValue;
+        if(fresh&&!leaving)fade.InsertKeyFrame(0,Windows.UI.Color.FromArgb(0,255,255,255));
+        fade.InsertKeyFrame(1,Windows.UI.Color.FromArgb(leaving?(byte)0:(byte)255,255,255,255),easing);white.StartAnimation("Color",fade);
     }
     internal void Hold(){shape?.StopAnimation("Offset");white?.StopAnimation("Color");if(shape!=null)shape.Offset=new(left,top);if(white!=null)white.Color=Microsoft.UI.Colors.White;}
     protected override void OnDefaultSystemBackdropConfigurationChanged(ICompositionSupportsSystemBackdrop connected,XamlRoot root)

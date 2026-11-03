@@ -53,7 +53,7 @@ public sealed partial class MainWindow
     }
     private ToggleSwitch ServiceToggle(string name,bool enabled,RoutedEventHandler handler)
     {
-        var toggle=new ToggleSwitch{IsOn=enabled,OnContent="",OffContent="",MinWidth=0,Width=52,Height=32,MinHeight=32,HorizontalAlignment=HorizontalAlignment.Right};
+        var toggle=new ToggleSwitch{IsOn=enabled,OnContent="",OffContent="",MinWidth=0,Width=40,Height=24,MinHeight=24,HorizontalAlignment=HorizontalAlignment.Right};
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle,name);toggle.Toggled+=handler;return toggle;
     }
     private FrameworkElement PowerServiceRow(string key,string glyph,string title,string description,bool inset=true)
@@ -61,10 +61,9 @@ public sealed partial class MainWindow
         var toggle=ServiceToggle(title,false,async(_,_)=>{if(!syncingDesktopServices)await ChangePowerService(key);});
         desktopPowerSwitches[key]=toggle;
         var hint=Ui.Text("读取中",11,muted:true);hint.MinHeight=14;desktopPowerHints[key]=hint;
-        var row=DetailRow(glyph,title,description,toggle,0,hint);row.MinHeight=56;
-        if(!inset)return row;
-        var card=DetailInset(row);card.Padding=new Thickness(8);return card;
+        var row=DetailRow("",title,"",toggle,0,hint);row.MinHeight=40;return SuiteVisuals.Rule(row);
     }
+
     private async Task ReadDesktopServices(bool force=false)
     {
         if(closed||upstream==null||desktopServicesReading||desktopServiceBusy||(!force&&DateTimeOffset.Now-lastDesktopServicesRead<TimeSpan.FromSeconds(8)))return;
@@ -94,6 +93,7 @@ public sealed partial class MainWindow
     }
     private void SyncDesktopServices()
     {
+        RefreshPaintedState();
         syncingDesktopServices=true;
         try
         {
@@ -158,6 +158,11 @@ public sealed partial class MainWindow
     {
         if(upstream==null)return;
         bool target=desktopPowerSwitches[key].IsOn;
+        await ChangePowerService(key,target);
+    }
+    private async Task ChangePowerService(string key,bool target)
+    {
+        if(upstream==null)return;
         await DesktopServiceAction("power-"+key,()=>
         {
             switch(key)

@@ -10,7 +10,7 @@ public sealed class Telemetry
 {
     private ulong lastIdle, lastKernel, lastUser;
     private bool sampled;
-    public SystemSnapshot Read()
+    public double? ReadCpuPercent()
     {
         double? cpu = null;
         if (GetSystemTimes(out ulong idle, out ulong kernel, out ulong user))
@@ -22,6 +22,11 @@ public sealed class Telemetry
             }
             (lastIdle, lastKernel, lastUser, sampled) = (idle, kernel, user, true);
         }
+        return cpu;
+    }
+    public SystemSnapshot Read()
+    {
+        double? cpu = ReadCpuPercent();
         var mem = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
         bool memoryOk = GlobalMemoryStatusEx(ref mem), batteryOk = GetSystemPowerStatus(out var power);
         using var process = Process.GetCurrentProcess();
@@ -40,3 +45,4 @@ public sealed class Telemetry
     [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GlobalMemoryStatusEx(ref MemoryStatus status);
     [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetSystemPowerStatus(out PowerStatus status);
 }
+

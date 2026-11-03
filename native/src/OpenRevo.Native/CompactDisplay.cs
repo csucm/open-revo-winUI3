@@ -59,7 +59,16 @@ public sealed partial class MainWindow
         refreshButtons.Clear();
         refreshMenuItems.Clear();refreshMoreButton=null;
         var controls=new List<FrameworkElement>{LowRefreshButton()};
-        if(rates.Length==0)controls.Add(Ui.Text("待读取",12,muted:true));
+        if(rates.Length==0)
+        {
+            if(controls[0] is Control low)low.IsEnabled=false;
+            foreach(string label in new[]{"最低刷新率","最高刷新率"})
+            {
+                var pending=Ui.Button(label,(_,_)=>{});pending.IsEnabled=false;
+                pending.Padding=new Thickness(4,6,4,6);pending.FontSize=12;
+                ToolTipService.SetToolTip(pending,"尚未识别可用刷新率");controls.Add(pending);
+            }
+        }
         else
         {
             controls.Add(Rate(rates[0]));
@@ -97,7 +106,7 @@ public sealed partial class MainWindow
             IsEnabled = displayState?.Active == true && screenBrightness.HasValue && !displayBusy, MinHeight = 28 };
         AttachBrightnessEvents(slider);
         var content = Ui.Stack(heading, BrightnessTrack(slider)); content.Spacing = 0;
-        var card = Ui.Card(content); card.Padding = new Thickness(8, 6, 8, 4); return card;
+        var card = Ui.Card(content); card.Padding = new Thickness(8, 6, 8, 4); return PanelAnchor("brightness",card);
     }
     private void AttachBrightnessEvents(Slider slider)
     {
@@ -138,7 +147,7 @@ public sealed partial class MainWindow
                 {
                     if(target!=screenBrightness)await writeBrightness(target);
                     screenBrightness=target;
-                    if(requestedBrightness==target)requestedBrightness=null;
+                    if(requestedBrightness==target){requestedBrightness=null;ConfirmedActionOsd("屏幕亮度 · "+target+"%","brightness");}
                 }
                 catch(Exception error)
                 {
@@ -161,6 +170,7 @@ public sealed partial class MainWindow
         Put("brightnessTitle",$"☼  屏幕亮度：{shown?.ToString()??"—"}%");
         Put("brightnessDetailTitle",$"内置屏亮度：{shown?.ToString()??"—"}%");
         bool available=displayState?.Active==true&&shown.HasValue&&!displayBusy;
+        if(approvedBrightnessNumber!=null){approvedBrightnessNumber.IsEnabled=available;if(!brightnessEditing&&approvedBrightnessNumber.Value!=(shown??double.NaN)){syncingBrightness=true;approvedBrightnessNumber.Value=shown??double.NaN;syncingBrightness=false;}}
         if(brightnessSlider!=null)
         {
             if(brightnessSlider.IsEnabled!=available)brightnessSlider.IsEnabled=available;
@@ -179,3 +189,5 @@ public sealed partial class MainWindow
         }
     }
 }
+
+

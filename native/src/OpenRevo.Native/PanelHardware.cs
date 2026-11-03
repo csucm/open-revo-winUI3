@@ -18,7 +18,8 @@ public sealed partial class MainWindow
     private bool gpuReadFresh;
     private GpuBootState? gpuBoot;
     private GpuRuntimeCapabilities? gpuRuntime;
-    private bool GpuRestartPending => gpuBoot?.Pending==true;
+    private int GpuRuntimeMode=>gpuBoot?.InitialMode==3?3:gpuRuntime is {HybridIgpuSupported:true,IgpuActive:bool active}?(active?1:2):gpuBoot?.InitialMode??0;
+    private bool GpuRestartPending=>GpuRuntimeMode is >=1 and <=3&&gpuState?.Known==true?gpuState.Mode!=GpuRuntimeMode:gpuBoot?.Pending==true;
     private string gpuModeLabel = "状态待读取";
     private readonly Dictionary<int, Button> gpuButtons = [];
     private GpuModeState? gpuState;
@@ -46,6 +47,10 @@ public sealed partial class MainWindow
                 lightingReadFresh=true;
                 rgbLevel = (light.Backlight & 2) != 0 ? 0 : Math.Clamp(light.Backlight >> 5, 0, 4);
                 rgbMode = rgbLevel == 0 ? "关闭背光" : (light.Trigger & Vault.RainbowMask) != 0 ? "彩虹循环" : "静态单色";
+                // Preserve the actual RGB when changing brightness or effects. A
+                // nearest named preset is a label, never a replacement readback.
+                uint Channel(int value)=>(uint)Math.Clamp((int)Math.Round(value*255d/50),0,255);
+                customRgb=Channel(light.Red)<<16|Channel(light.Green)<<8|Channel(light.Blue);
                 rgbColor = colorPresets.MinBy(x => Math.Pow((x.Hex>>16)-light.Red*255d/50,2)+Math.Pow(((x.Hex>>8)&255)-light.Green*255d/50,2)+Math.Pow((x.Hex&255)-light.Blue*255d/50,2)).Name;
                 }
                 catch(Exception error){lightingProbeError=error.Message;DiagnosticLog.Failure("lighting.initial_read",error,new{keyboard.Kind});}
@@ -86,22 +91,23 @@ public sealed partial class MainWindow
         {
             var definition=originalGpuModes.Single(m=>m.Mode==value);
             var button=Ui.Button(definition.Title,async(_,_)=>await RunGpuRequest(value));
-            var content=Ui.Stack(OriginalDeviceGraphic(definition.Icon,15),Ui.Text(definition.Title,12));content.Spacing=2;content.HorizontalAlignment=HorizontalAlignment.Center;
-            button.Content=content;button.Padding=new Thickness(3);button.Height=44;
+            var content=Ui.Stack(ApprovedIcons.Create(value==1?"gpu-integrated":value==2?"gpu-hybrid":"gpu-discrete",28,true,true),Ui.Text(definition.Title,12));content.Spacing=2;content.HorizontalAlignment=HorizontalAlignment.Center;
+            button.Content=content;button.Padding=new Thickness(3);button.Height=56;
             button.IsEnabled=hardware.Active&&upstream!=null&&!gpuChanging&&gpuReadFresh&&gpuState?.Supports(value)==true;
             if(gpuState?.Mode==value)button.Style=(Style)Application.Current.Resources["SelectedChoiceStyle"];
             ToolTipService.SetToolTip(button,definition.Description+"\n保存下次启动设置；支持情况以硬件回读为准。");gpuButtons[value]=button;return button;
         }
-        // Keep the existing mini order, columns and 44-DIP button height.
+        // Keep the approved mini order, columns and 56-DIP button height.
         return Columns(Mode(1),Mode(2),Mode(3));
     }
 
     private async Task RunGpuRequest(int target)
     {
         if(closed||gpuChanging||(target!=0&&(!hardware.Active||!gpuReadFresh))||upstream==null)return;
+        if(target!=0&&gpuState?.Mode==target&&(target==3||GpuRuntimeMode==target||gpuRuntime?.HybridIgpuSupported!=true||gpuBoot?.InitialMode==3))return;
         await operationQueue.WaitAsync();
         if(closed){operationQueue.Release();return;}
-        gpuChanging=true;UpdateGpuControls();
+        bool runtimeChanged=false;gpuChanging=true;UpdateGpuControls();
         try
         {
             if(ecTask!=null)try{await ecTask;}catch{}
@@ -115,6 +121,9 @@ public sealed partial class MainWindow
             }
             var reply=await GpuModeControl.Request(target,gpuState?.Known==true?gpuState.Mode:0);
             if(closed)return;
+            if(reply.Success&&target is 1 or 2&&gpuBoot?.InitialMode is 1 or 2&&gpuRuntime is {HybridIgpuSupported:true,IgpuActive:bool expected})
+            {runtimeChanged=expected!=(target==1);gpuRuntime=await Task.Run(()=>hardware.SwitchHybridRuntime(expected,target==1));}
+            else if(target==0)gpuRuntime=await Task.Run(GpuRuntimeCapabilities.Probe);
             if(reply.State?.Known==true)
             {
                 gpuReadFresh=true;
@@ -126,14 +135,15 @@ public sealed partial class MainWindow
                 await SavePreferences();
             }
             if(!reply.Success){await GpuMessage("显卡设置未完成",reply.Error??"请重新读取显卡设置。");return;}
-            if(reply.Changed)
+            if(reply.Changed||runtimeChanged)
             {
-                await GpuMessage(GpuRestartPending?"显卡模式已保存":"已撤销显卡切换",GpuRestartPending?$"已选择{OriginalGpuName(target)}，重启后生效。准备好后请自行重启电脑。":"已恢复本次开机的显卡设置，无需为此次切换重启。");
+                ConfirmedActionOsd(OriginalGpuName(target)+(GpuRestartPending?" · 待重启":" · 已生效，无需重启"),target==1?"gpu-integrated":target==2?"gpu-hybrid":"gpu-discrete");
+                await GpuMessage(GpuRestartPending?"显卡模式已保存":"显卡设置已确认",GpuRestartPending?$"已选择{OriginalGpuName(target)}，重启后生效。准备好后请自行重启电脑。":"已确认当前显卡模式，无需为此次切换重启。");
             }
             else if(target!=0)await GpuMessage("无需更改",GpuRestartPending?"此模式已经保存，重启后生效。":"固件已设置为此模式。");
         }
         catch(System.ComponentModel.Win32Exception error) when(error.NativeErrorCode==1223){if(!closed)await GpuMessage("已取消","没有执行显卡操作。");}
-        catch(Exception error){actions.Add(error.ToString());if(!closed)await GpuMessage("显卡结果未确认","请点击显卡模式标题重新读取设置。");}
+        catch(Exception error){gpuReadFresh=false;gpuRuntime=null;actions.Add(error.ToString());if(!closed)await GpuMessage("显卡结果未确认","请点击显卡模式标题重新读取设置。");}
         finally{gpuChanging=false;lastEc=DateTimeOffset.MinValue;operationQueue.Release();if(!closed)UpdateGpuControls();}
     }
     private Task GpuMessage(string title,string message)
@@ -143,8 +153,9 @@ public sealed partial class MainWindow
     }
     private void UpdateGpuControls()
     {
+        RefreshPaintedState();
         gpuModeLabel=!gpuReadFresh?"待读取":GpuRestartPending?"待重启":gpuState?.Known==true?OriginalGpuName(gpuState.Mode):"待读取";
-        Put("gpuTitle","显卡模式："+gpuModeLabel);
+        Put("gpuTitle","当前运行："+OriginalGpuName(GpuRuntimeMode)+(GpuRestartPending?" · 目标："+OriginalGpuName(gpuState?.Mode??0)+" · 待重启":" · 已生效"));
         if(gpuReadButton!=null)
         {
             gpuReadButton.IsEnabled=EcReader.IsAllowed(identity)&&!gpuChanging;

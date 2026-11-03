@@ -22,11 +22,15 @@ public sealed partial class MainWindow
         try
         {
             await Task.Run(() => DisplayControl.SetRefresh(original, target)); changed = true;
+            if(UsePaintedUi)keep=await PaintDialog($"保留 {target} Hz？",Paint.Text("15 秒内确认，否则自动恢复原刷新率。"),"保留","恢复",15000);
+            else
+            {
             var dialog = new ContentDialog { XamlRoot = root.XamlRoot, Title = $"保留 {target} Hz？", Content = Ui.Text("15 秒内确认，否则自动恢复原刷新率。"), PrimaryButtonText = "保留", CloseButtonText = "恢复", DefaultButton = ContentDialogButton.Close };
             dialogOpen = true;
             var shown = dialog.ShowAsync().AsTask();
             if (await Task.WhenAny(shown, Task.Delay(15000)) != shown) dialog.Hide();
             keep = await shown == ContentDialogResult.Primary;
+            }
         }
         catch (Exception e) { DiagnosticLog.Failure("display.refresh",e,new{original,target});actions.Add("刷新率操作：" + e.Message); }
         finally
@@ -37,7 +41,7 @@ public sealed partial class MainWindow
                 try { await Task.Run(() => DisplayControl.SetRefresh(target, original)); }
                 catch (Exception e) { await ShowMessage("刷新率恢复未确认", e.Message); }
             }
-            await ReadDisplay(); displayBusy = false; if (!closed) UpdateDisplayValues();
+            await ReadDisplay(); displayBusy = false; if (!closed) UpdateDisplayValues();if(changed&&displayState?.Hertz==(keep?target:original))ConfirmedActionOsd((keep?"屏幕刷新率 · ":"已恢复刷新率 · ")+displayState.Hertz+" Hz","refresh");
         }
     }
 }

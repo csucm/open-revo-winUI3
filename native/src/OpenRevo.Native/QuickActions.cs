@@ -72,13 +72,14 @@ public sealed partial class MainWindow
                 "awake"=>sessionPower?.Enabled==true?"防休眠中":"防休眠",_=>"关闭屏幕"
             };
             string glyph=key switch{"camera"=>quickState.Camera==true?"":"","mic"=>"","win"=>"","awake"=>"",_=>""};
-            if(!Equals(button.Tag,label))
+            if(mini&&!Equals(button.Tag,label))
             {
                 var content=new StackPanel{Spacing=3,HorizontalAlignment=HorizontalAlignment.Center};
                 content.Children.Add(Ui.Icon(glyph,mini?17:20));content.Children.Add(Ui.Text(label,mini?10:12));button.Content=content;button.Tag=label;
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button,label);
             }
             button.IsEnabled=key switch{"camera"=>hardware.Active&&quickState.CameraAvailable&&quickState.Camera.HasValue&&upstream!=null,"mic"=>quickState.Microphone.HasValue&&upstream!=null,"win"=>hardware.Active&&quickState.WinLocked.HasValue,_=>true};
+            if(!mini){UpdateApprovedQuickButton(button,key,key switch{"camera"=>quickState.Camera,"mic"=>quickState.Microphone,"win"=>quickState.WinLocked,"awake"=>sessionPower?.Enabled==true,_=>false},quickBusy);continue;}
             if(selected)button.Style=(Style)Application.Current.Resources["SelectedChoiceStyle"];else button.ClearValue(FrameworkElement.StyleProperty);
         }
     }
@@ -95,11 +96,16 @@ public sealed partial class MainWindow
             switch(key)
             {
                 case "camera":
-                    quickState=await ToggleCameraThroughCore();break;
+                    quickState=await ToggleCameraThroughCore();
+                    if(quickState.Camera is bool camera)ConfirmShortcutOsd(6,camera?1u:0u);
+                    break;
                 case "mic":
-                    bool mic=await Task.Run(()=>{var value=upstream?.ReadMicrophone()??throw new IOException("未找到默认麦克风。");upstream!.SetMicrophone(!value);return !value;});quickState=quickState with{Microphone=mic};break;
+                    bool mic=await Task.Run(()=>{var value=upstream?.ReadMicrophone()??throw new IOException("未找到默认麦克风。");upstream!.SetMicrophone(!value);
+                        bool confirmed=upstream.ReadMicrophone()??throw new IOException("麦克风状态回读失败。");
+                        if(confirmed==value)throw new IOException("麦克风状态未改变。");
+                        return confirmed;});quickState=quickState with{Microphone=mic};ConfirmShortcutOsd(7,mic?1u:0u);break;
                 case "awake":
-                    sessionPower??=new SessionPower();sessionPower.SetKeepAwake(!sessionPower.Enabled);break;
+                    sessionPower??=new SessionPower();sessionPower.SetKeepAwake(!sessionPower.Enabled);ConfirmShortcutOsd(10,sessionPower.Enabled?1u:0u);break;
                 case "screen":
                     screenOffPending=true;
                     try
@@ -110,6 +116,7 @@ public sealed partial class MainWindow
                         {
                             screenOffInput=SessionPower.ReadLastInputTick();
                             SessionPower.TurnOffScreen(WinRT.Interop.WindowNative.GetWindowHandle(this));
+                            ConfirmedActionOsd("息屏请求已发出","display");
                         }
                     }
                     finally{screenOffPending=false;}

@@ -46,8 +46,9 @@ public sealed partial class MainWindow
         using var trace=OpenRevo.Core.DiagnosticLog.Begin("hardware.action",new{page=currentPage,mini,connected=hardware.Active});
         try
         {
-            var result=await Task.Run(operation);actions.Add(JsonSerializer.Serialize(result));
+            int? beforeLimit=hardware.State?.Upper;var result=await Task.Run(operation);actions.Add(JsonSerializer.Serialize(result));
             trace.Complete(new{result});
+            if(hardware.State is {} charge&&beforeLimit!=charge.Upper)ConfirmedActionOsd("充电上限 · "+charge.Upper+"%","battery");if(success.Contains("撤销")&&success.Contains("灯光"))ConfirmedActionOsd("已撤销上次灯光更改","lighting");
             hardwareMessage=success;controlAt=DateTimeOffset.Now;ecEnabled=true;lastEc=DateTimeOffset.MinValue;
             if(hardware.State is {} state)ec=ec with{BatteryLimit=state.Upper,FanBoost=state.FanBoost};
             if(actions.Count>128)actions.RemoveRange(0,actions.Count-128);
@@ -62,6 +63,7 @@ public sealed partial class MainWindow
     }
     private void UpdateControlValues()
     {
+        RefreshPaintedState();
         if(takeoverSwitch!=null)
         {
             syncingTakeover=true;

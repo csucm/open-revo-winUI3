@@ -39,7 +39,9 @@ public static class OpenRevoRoundedMask {
 }
 '@
 }
+if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'OpenRevo-square-source.png')){
 [OpenRevoRoundedMask]::Export((Join-Path $PSScriptRoot 'OpenRevo-square-source.png'),(Join-Path $PSScriptRoot 'OpenRevo.png'))
+} # Source distributions can rebuild from the final full-resolution RGBA PNG.
 $source = [Drawing.Image]::FromFile((Join-Path $PSScriptRoot 'OpenRevo.png'))
 $sizes = @(16,20,24,32,40,48,64,96,128,256)
 $frames = [Collections.Generic.List[byte[]]]::new()
@@ -76,5 +78,8 @@ try {
     [IO.File]::WriteAllBytes((Join-Path $PSScriptRoot 'App.ico'),$output.ToArray())
 } finally { $writer.Dispose(); $output.Dispose() }
 foreach ($project in @('OpenRevo.Native','OpenRevo.Cpp')) {
+    if(Test-Path -LiteralPath (Join-Path $PSScriptRoot "../$project")){
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'App.ico') -Destination (Join-Path $PSScriptRoot "../$project/App.ico") -Force
+    }
 }
+
