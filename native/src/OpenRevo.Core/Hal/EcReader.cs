@@ -1,44 +1,13 @@
 // GPL-3.0-or-later. Read protocol ported from faintonce/open-revo
 // b7d2b526e60cd04965eadab21e606bdb1e1aa56e, driver/wmi_ec.rs.
 // Bounded protocol transport; hardware writes are exposed only through HardwareSession.
-using Microsoft.Win32.SafeHandles;
-using System.Runtime.InteropServices;
+
+
 
 namespace OpenRevo.Core.Hal;
 
 public sealed record EcSnapshot(int? CpuFan, int? GpuFan, int? BatteryLimit, bool? FanBoost, string Status);
 public interface IEcTransport : IDisposable { byte? Read(ushort address); }
-
-internal sealed class AcpiReadTransport : IEcTransport
-{
-    private readonly SafeFileHandle handle;
-    internal AcpiReadTransport()
-    {
-        handle = CreateFileW(@"\\.\ACPIDriver", 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
-        if (handle.IsInvalid) { var error = Marshal.GetLastWin32Error(); handle.Dispose(); throw new System.ComponentModel.Win32Exception(error); }
-    }
-    public byte? Read(ushort address)
-    {
-        uint input = address;
-        return DeviceIoControl(handle, Vault.ReadIoctl, ref input, sizeof(uint), out uint output, sizeof(uint), out uint count, IntPtr.Zero)
-            && count == sizeof(uint) && output <= byte.MaxValue ? (byte)output : null;
-    }
-    public void Dispose() => handle.Dispose();
-    internal bool Write(ushort address, byte value)
-    {
-        var input = new WriteInput { Address = address, Value = value };
-        return DeviceIoControlWrite(handle, Vault.WriteIoctl, ref input, 8, out _, 4, out _, IntPtr.Zero);
-    }
-    [StructLayout(LayoutKind.Sequential)] private struct WriteInput { public uint Address, Value; }
-    [DllImport("kernel32.dll", EntryPoint = "DeviceIoControl", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DeviceIoControlWrite(SafeFileHandle h, uint code, ref WriteInput input, uint size, out uint output, uint outputSize, out uint count, IntPtr overlapped);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DeviceIoControl(SafeFileHandle h, uint code, ref uint input, uint inputSize, out uint output, uint outputSize, out uint count, IntPtr overlapped);
-}
 
 public static class EcReader
 {

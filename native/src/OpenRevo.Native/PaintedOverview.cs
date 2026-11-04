@@ -43,7 +43,7 @@ public sealed partial class MainWindow
     }
     private void PaintNavigate(string route)
     {customTuningOpen=route=="tuning";colorTuningOpen=route=="color";if(route=="lightingzone"){selectedLightingZone="front";currentPage="devices";}else currentPage=route is "tuning" or "color"?"display":route;Render();}
-    private string PaintRoute=>customTuningOpen?"tuning":colorTuningOpen?"color":currentPage=="devices"&&selectedLightingZone!="keyboard"?"lightingzone":currentPage;
+    private string PaintRoute=>customTuningOpen?"tuning":colorTuningOpen?"color":currentPage=="devices"&&selectedLightingZone!="keyboard"&&!(keyboard.Kind=="White"&&hardware.CoreDelegated)?"lightingzone":currentPage;
     private void RenderPaintedPage()
     {
         paintBindings.Clear();string route=PaintRoute;
@@ -97,11 +97,18 @@ public sealed partial class MainWindow
         {
             FrameworkElement Live(string key,double size=12){var t=Paint.Text("—",size);live[key]=t;return t;}
             string prefix=id=="vram"?"overviewMemory":id=="cpu"?"overviewCpu":"overviewGpu";
-            var head=Paint.Between(Paint.Text(tileTitles[id],14,true),Paint.Inline(3,Live(prefix+"Mhz"),Paint.Text("MHz",12,muted:true)));
+            var title = id == "vram" ? PT(() => OverviewMemoryTitle, 14, true) : Paint.Text(tileTitles[id], 14, true);
+            if (id == "gpu")
+            {
+                live["overviewGpuTitle"] = title;
+                title.TextWrapping = TextWrapping.NoWrap;
+                title.TextTrimming = TextTrimming.CharacterEllipsis;
+            }
+            var head=Paint.Between(title,Paint.Inline(3,Live(prefix+"Mhz"),Paint.Text("MHz",12,muted:true)),id=="gpu"?8:16);
             var value=id=="vram"?Paint.Inline(3,Live("overviewVramUsed",24),Live("overviewVramTotal")):Paint.Inline(2,Live(prefix+"Temp",24),Paint.Text("°C",14));
-            var foot=Paint.Between(Paint.Inline(5,Paint.Text("占用",12,muted:true),Live(id=="vram"?"overviewVramUsage":prefix+"Usage")),id=="vram"?Paint.Text("",12):Live(prefix+"Power"),8);
+            var foot=Paint.Between(Paint.Inline(5,Paint.Text("占用",12,muted:true),Live(id=="vram"?"overviewVramUsage":prefix+"Usage")),id=="vram"?PT(()=>OverviewMemoryNote,12,muted:true):Live(prefix+"Power"),8);
             var meter=new Border{Height=3,CornerRadius=new(2),Background=Paint.Brush(Paint.Line(root))};var fill=new Border{Height=3,CornerRadius=new(2),Background=Paint.Brush(Paint.Accent(root)),HorizontalAlignment=HorizontalAlignment.Left};meter.Child=fill;
-            paintBindings.Add(()=>{double ratio=id=="cpu"?latest?.CpuPercent??0:id=="gpu"?overviewTelemetry?.Gpu?.Usage??0:overviewTelemetry?.Gpu?.MemoryPercent??0;fill.Width=Math.Max(0,meter.ActualWidth)*Math.Clamp(ratio/100,0,1);});
+            paintBindings.Add(()=>{double ratio=id=="cpu"?latest?.CpuPercent??0:id=="gpu"?CurrentOverviewGpu?.Usage??0:CurrentOverviewGpu?.DisplayMemoryPercent??0;fill.Width=Math.Max(0,meter.ActualWidth)*Math.Clamp(ratio/100,0,1);});
             return PaintMinHeight(Paint.Card(Paint.Stack(8,head,value,foot,meter)),120);
         }
         string icon=id=="performance"?"performance":id=="battery"?"battery":"display";var heading=Paint.Inline(8,Paint.Icon(icon,28,true,false),Paint.Text(tileTitles[id],16,true));
@@ -114,8 +121,8 @@ public sealed partial class MainWindow
         FrameworkElement controls;
         if(id=="battery")
         {
-            var cap=new PaintSelect("充电上限",new[]{"100%","80%","60%"},-1,async i=>{if(!uiReviewMode)await RunHardware(()=>hardware.SetBatteryPreset(new[]{100,80,60}[i]),"充电上限已回读确认。");}){Variant="plain",MinWidth=0,MinHeight=28,Padding=new(0)};
-            cap.Content=Paint.Between(Paint.Text("充电上限",12),Paint.Inline(6,PT(()=>hardware.State?.Upper is byte limit?limit+"%":"—",12),Paint.Utility("chevron",14)));cap.StretchContent();paintBindings.Add(()=>cap.IsEnabled=hardware.Active&&hardware.SupportsBattery&&!hardwareBusy);controls=Paint.Stack(0,cap,PL("Windows 电源计划",()=>PaintNavigate("settings")));
+            var cap=new PaintSelect("充电上限",new[]{"100%","80%","60%"},-1,async i=>{if(!uiReviewMode)await RunHardware(()=>hardware.ApplyBatteryCommand(new[]{100,80,60}[i]),hardware.CoreDelegated?"Core 已发送充电上限命令。":"充电上限已回读确认。");}){Variant="plain",MinWidth=0,MinHeight=28,Padding=new(0)};
+            cap.Content=Paint.Between(Paint.Text("充电上限",12),Paint.Inline(6,PT(()=>hardware.State?.Upper is byte limit?limit+"%":"—",12),Paint.Utility("chevron",14)));cap.StretchContent();BindCapability(cap,()=>hardware.SupportsBattery);paintBindings.Add(()=>cap.IsEnabled=hardware.Active&&hardware.SupportsBattery&&!hardwareBusy);controls=Paint.Stack(0,cap,PL("Windows 电源计划",()=>PaintNavigate("settings")));
         }
         else
         {
@@ -134,21 +141,46 @@ public sealed partial class MainWindow
             var b=PB(name,()=>gpu?RunGpuRequest(mode):ApplySavedPerformance(mode),true);b.Content=Paint.Stack(4,img,label);b.Padding=new(3);b.Height=b.MinHeight=compact?56:68;b.HorizontalAlignment=HorizontalAlignment.Stretch;bool last=false;
             paintBindings.Add(()=>{bool selected=gpu?gpuState?.Mode==mode:hardware.CurrentMode==mode;b.Selected=selected;b.IsEnabled=hardware.Active&&!hardwareBusy&&(gpu?gpuReadFresh&&!gpuChanging&&gpuState?.Supports(mode)==true:mode==4?hardware.SupportsCustomTuning:hardware.SupportsPerformance);if(selected!=last){((StackPanel)b.Content!).Children[0]=Paint.Icon(icon,compact?28:mode==4?34:24,selected,compact||!gpu&&mode!=4);last=selected;}});
             FrameworkElement item=b;if(!gpu&&mode==4){var cell=new Grid();cell.Children.Add(b);var gear=new PaintButton("编辑自定义预设",OpenTuning){Content=Paint.Utility("settings",16),Variant="icon",Width=24,Height=24,MinHeight=0,Padding=new(2),HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Top};cell.Children.Add(gear);item=cell;}
+            if(!gpu&&mode==4)
+            {
+                BindCapability(item,()=>hardware.SupportsCustomTuning);
+                var column=grid.ColumnDefinitions[i];
+                paintBindings.Add(()=>column.Width=ShowDeclaredControl(hardware.SupportsCustomTuning)?new GridLength(1,GridUnitType.Star):new GridLength(0));
+            }
             Grid.SetColumn(item,i);grid.Children.Add(item);
-        }return grid;
+        }
+        return gpu?PaintGpuAvailability(grid):grid;
+    }
+    private bool ShowDeclaredControl(bool supported)=>uiReviewMode||!hardware.CoreDelegated||!CoreMachine.Current.Ready||supported;
+    private void BindCapability(FrameworkElement control,Func<bool> supported)
+    {
+        void Update()=>control.Visibility=ShowDeclaredControl(supported())?Visibility.Visible:Visibility.Collapsed;
+        Update();
+        paintBindings.Add(Update);
     }
     private bool? PaintQuickState(string key)=>key switch{"touchpad"=>extraSwitches.Touchpad,"fn"=>extraSwitches.FnLock,"win"=>quickState.WinLocked,"camera"=>quickState.Camera,"mic"=>quickState.Microphone,"osd"=>osdEnabled,"boost"=>hardware.State?.FanBoost??ec.FanBoost,"awake"=>sessionPower?.Enabled==true,_=>false};
-    private bool PaintQuickEnabled(string key)=>key switch{"camera"=>hardware.Active&&quickState.CameraAvailable&&quickState.Camera.HasValue&&upstream!=null,"mic"=>quickState.Microphone.HasValue&&upstream!=null,"win"=>hardware.Active&&quickState.WinLocked.HasValue,"touchpad" or "fn"=>hardware.Active&&upstream!=null&&PaintQuickState(key).HasValue,"boost"=>hardware.Active&&hardware.SupportsFanBoost&&!hardwareBusy,_=>true};
+    private bool PaintQuickEnabled(string key)=>key switch{"camera"=>hardware.Active&&quickState.CameraAvailable&&quickState.Camera.HasValue&&upstream!=null,"mic"=>quickState.Microphone.HasValue&&upstream!=null,"win"=>upstream!=null&&quickState.WinLocked.HasValue,"touchpad"=>hardware.SupportsTouchpad&&hardware.Active&&upstream!=null&&PaintQuickState(key).HasValue,"fn"=>hardware.Active&&!hardwareBusy&&(hardware.SupportsDeclaredFnLock&&(!(CoreMachine.Current.FnLockViaEc||CoreMachine.Current.FnLockReadback)||extraSwitches.FnLock.HasValue)||!hardware.CoreDelegated&&upstream!=null&&PaintQuickState(key).HasValue),"boost"=>hardware.Active&&hardware.SupportsFanBoost&&!hardwareBusy,_=>true};
     private async Task PaintQuickAction(string key)
-    {if(uiReviewMode)return;if(key is "touchpad" or "fn")await SetExtraSwitch(key);else if(key=="osd"){osdEnabled=!osdEnabled;await SavePreferences();if(!osdEnabled)nativeOsd?.Hide();else ConfirmedActionOsd("屏幕提示 · 已开启","osd");}else if(key=="boost")await RunHardware(()=>hardware.SetFanBoost(PaintQuickState(key)!=true),"强冷状态已回读确认。");else await RunQuickAction(key);}
+    {if(uiReviewMode)return;if(key=="fn"&&hardware.SupportsDeclaredFnLock&&!extraSwitches.FnLock.HasValue){if(!CoreMachine.Current.FnLockViaEc&&!CoreMachine.Current.FnLockReadback)await SelectDeclaredFnLock();return;}if(key is "touchpad" or "fn")await SetExtraSwitch(key);else if(key=="osd"){osdEnabled=!osdEnabled;await SavePreferences();if(!osdEnabled)nativeOsd?.Hide();else ConfirmedActionOsd("屏幕提示 · 已开启","osd");}else if(key=="boost")await RunHardware(()=>hardware.ApplyFanBoostCommand((PaintQuickState(key)??hardware.RequestedFanBoost)!=true),hardware.CoreDelegated?"Core 已发送强冷命令。":"强冷状态已回读确认。");else await RunQuickAction(key);}
+    private async Task SelectDeclaredFnLock()
+    {
+        var commands = Paint.Inline(8,
+            PB("开启 Fn 锁", () => RunHardware(() => hardware.ApplyDeclaredFnLock(true), "Core 已发送开启 Fn 锁命令。"), true),
+            PB("关闭 Fn 锁", () => RunHardware(() => hardware.ApplyDeclaredFnLock(false), "Core 已发送关闭 Fn 锁命令。"), true));
+        await PaintDialog("F1–F12 模式", Paint.Stack(8, Paint.Text("请选择命令。当前固件状态未知。"), commands));
+    }
+
     private FrameworkElement PaintQuickRow(string key,bool compact=false)
     {
         string name=key switch{"touchpad"=>"触摸板","win"=>"Win 键锁","fn"=>"F1–F12 模式","camera"=>"相机","mic"=>"麦克风","osd"=>"OSD 提示","boost"=>"一键强冷","awake"=>"防休眠",_=>"关闭屏幕"};
         string id=key switch{"win"=>"win-lock","fn"=>"fn-lock","boost"=>"fan","screen"=>"display",_=>key};string family=key switch{"win"=>"rose","fn"=>"violet","camera"=>"green","mic"=>"orange","boost"=>"cyan",_=>"blue"};
         var picture=new Grid{Width=compact?24:34,Height=compact?24:34};bool? last=null;
         void Icon(){bool on=PaintQuickState(key)==true||key=="screen";if(last==on&&picture.Children.Count>0)return;last=on;picture.Children.Clear();picture.Children.Add(Paint.Icon(id,compact?24:34,on));}Icon();paintBindings.Add(Icon);
-        string State(){bool? on=PaintQuickState(key);return key=="screen"?"仅息屏，电脑继续运行":!on.HasValue?"状态未知":key=="win"?(on.Value?"已锁定":"已解锁"):key=="fn"?(on.Value?"Fn Lock 已开启":"Fn Lock 已关闭"):key=="mic"?(on.Value?"收音已开启":"已静音"):key=="boost"?(on.Value?"强冷已开启":"自动温控"):key=="awake"?(on.Value?"保持唤醒":"随系统休眠"):(on.Value?"已开启":"已关闭");}
-        var button=PB(name,()=>PaintQuickAction(key),true);paintBindings.Add(()=>button.IsEnabled=PaintQuickEnabled(key));button.StretchContent();
+        string State(){if(key=="win")return requestedWinLocked.HasValue?"正在切换 Windows 软件锁":quickState.WinLocked switch{true=>"软件锁已开启 · 退出程序解除",false=>"软件锁已关闭",_=>"软件锁状态未知"};if(hardware.CoreDelegated){if(key=="camera")return quickState.Camera.HasValue?(quickState.Camera.Value?"Windows 相机已启用":"Windows 相机已禁用"):"Windows设备状态未知";if(key=="touchpad")return extraSwitches.Touchpad.HasValue?(extraSwitches.Touchpad.Value?"Windows已开启 · 固件未回读":"Windows已关闭 · 固件未回读"):"触摸板状态暂不可用";if(key=="fn"&&hardware.SupportsDeclaredFnLock&&!extraSwitches.FnLock.HasValue&&!CoreMachine.Current.FnLockViaEc&&!CoreMachine.Current.FnLockReadback)return "可发送 Fn 锁命令 · 固件状态未知";if(key=="fn"&&!extraSwitches.FnLock.HasValue)return "Fn 锁状态暂不可用";}bool? on=PaintQuickState(key);return key=="screen"?"仅息屏，电脑继续运行":!on.HasValue?"状态未知":key=="win"?(on.Value?"已锁定":"已解锁"):key=="fn"?(on.Value?"Fn Lock 已开启":"Fn Lock 已关闭"):key=="mic"?(on.Value?"收音已开启":"已静音"):key=="boost"?(on.Value?"强冷已开启":"自动温控"):key=="awake"?(on.Value?"保持唤醒":"随系统休眠"):(on.Value?"已开启":"已关闭");}
+        var button=PB(name,()=>PaintQuickAction(key),true);paintBindings.Add(()=>{button.IsEnabled=PaintQuickEnabled(key);ToolTipService.SetToolTip(button,State());});button.StretchContent();
+        if(key=="boost")BindCapability(button,()=>hardware.SupportsFanBoost);
+        else if(key=="fn")BindCapability(button,()=>hardware.SupportsDeclaredFnLock);
+        else if(key=="touchpad")BindCapability(button,()=>hardware.SupportsTouchpad);
         if(compact){var text=Paint.Text(name.Replace(" ",""),12);text.TextAlignment=TextAlignment.Center;text.TextWrapping=TextWrapping.NoWrap;picture.HorizontalAlignment=HorizontalAlignment.Center;button.Content=Paint.Stack(2,picture,text);button.Height=50;button.Padding=new(1,2,1,2);return button;}
         FrameworkElement tail;if(key=="screen"){tail=Paint.Card(Paint.Text("息屏",12),0,8,true);((Border)tail).Padding=new(8,2,8,2);}else{var indicator=new PaintSwitch(name,PaintQuickState(key)==true){Family=family,IsHitTestVisible=false,IsTabStop=false};paintBindings.Add(()=>indicator.IsOn=PaintQuickState(key)==true);tail=indicator;}
         button.Content=Paint.Between(Paint.Inline(8,picture,Paint.Stack(2,Paint.Text(name),PT(State,12,muted:true))),tail,10);button.Variant="plain";button.Padding=new(4,2,4,2);button.MinHeight=46;return button;
@@ -163,7 +195,7 @@ public sealed partial class MainWindow
         FrameworkElement Group(string icon,Func<string> title,Func<string> meta,FrameworkElement content)
         {var heading=Paint.Between(Paint.Inline(6,Paint.Icon(icon,24,true,true),PT(title,12,true)),PT(meta,12,muted:true),7);return Paint.Card(Paint.Stack(4,heading,content),7,12);}
         page.Children.Add(Group("performance",()=>"性能模式："+PerformanceName,()=>"CPU "+(temperature.Cpu?.ToString()??"—")+"°C · fans "+(ec.CpuFan?.ToString()??"—")+" RPM",PaintModes(true)));
-        page.Children.Add(Group("gpu",()=>"显卡模式："+gpuModeLabel,()=>"GPU "+(temperature.Gpu?.ToString()??"—")+"°C · fans "+(ec.GpuFan?.ToString()??"—")+" RPM",PaintModes(true,true)));
+        page.Children.Add(Group("gpu",()=>PaintIntegratedOnly?"显卡模式：集成显卡":"显卡模式："+gpuModeLabel,()=>PaintIntegratedOnly?"":("GPU "+(temperature.Gpu?.ToString()??"—")+"°C · fans "+(ec.GpuFan?.ToString()??"—")+" RPM"),PaintModes(true,true)));
         var rates=new List<FrameworkElement>();var low=PB("拔电低刷",async()=>{lowRefreshOnBattery=!lowRefreshOnBattery;await SavePreferences();if(!uiReviewMode)await CheckAutomaticRefresh(true);ConfirmedActionOsd("拔电自动低刷 · "+(lowRefreshOnBattery?"已开启":"已关闭"),"refresh");});low.Padding=new(3);low.MinHeight=30;rates.Add(low);paintBindings.Add(()=>low.Selected=lowRefreshOnBattery);
         int[] values=displayState?.Rates.Distinct().Order().ToArray()??[];
         foreach(bool high in new[]{false,true}){int hz=values.Length>0?(high?values[^1]:values[0]):0;var b=PB(hz>0?hz+" Hz":high?"最高刷新率":"最低刷新率",()=>ChangeRefresh(hz),true);b.MinHeight=30;b.Padding=new(3);paintBindings.Add(()=>{b.IsEnabled=hz>0&&displayState?.Active==true&&!displayBusy;b.Selected=displayState?.Hertz==hz;});rates.Add(b);}
@@ -171,7 +203,7 @@ public sealed partial class MainWindow
         var presets=Paint.Inline(4);foreach(int n in new[]{25,60,100}){var b=PB(n==25?"暗光25%":n==60?"室内60%":"户外100%",()=>SetCompactBrightness(n),true);b.MinHeight=23;b.Padding=new(4,1,4,1);b.Content=Paint.Text(n==25?"暗光25%":n==60?"室内60%":"户外100%",12);paintBindings.Add(()=>b.IsEnabled=displayState?.Active==true&&screenBrightness.HasValue&&!displayBusy);presets.Children.Add(b);}
         var brightness=new PaintSlider("屏幕亮度",10,100,screenBrightness??100,1,async v=>{if(!uiReviewMode)await SetCompactBrightness((int)v);});paintBindings.Add(()=>{brightness.IsEnabled=displayState?.Active==true&&screenBrightness.HasValue&&!displayBusy;brightness.Value=screenBrightness??100;});page.Children.Add(Paint.Card(Paint.Stack(0,Paint.Between(Paint.Inline(6,Paint.Icon("brightness",24),PT(()=>"屏幕亮度："+(screenBrightness?.ToString()??"—")+"%",12,true)),presets,4),brightness),7,12));
         page.Children.Add(PaintMiniLighting());
-        var charge=new List<FrameworkElement>();foreach(var(name,cap)in new[]{("工作站",60),("平衡",80),("长效",100)}){var b=PB(name,()=>RunHardware(()=>hardware.SetBatteryPreset(cap),"充电上限已回读确认。"),true);b.MinHeight=30;b.Padding=new(4);b.Content=Paint.Text(name,12);paintBindings.Add(()=>{b.IsEnabled=hardware.Active&&hardware.SupportsBattery&&!hardwareBusy;b.Selected=hardware.State?.Upper==cap;});charge.Add(b);}page.Children.Add(Group("battery",()=>"电池健康",()=>hardware.State?.Upper is byte n?"上限 "+n+"%":"上限 —",PaintColumns(charge.ToArray())));
+        var charge=new List<FrameworkElement>();foreach(var(name,cap)in new[]{("工作站",60),("平衡",80),("长效",100)}){var b=PB(name,()=>RunHardware(()=>hardware.ApplyBatteryCommand(cap),hardware.CoreDelegated?"Core 已发送充电上限命令。":"充电上限已回读确认。"),true);b.MinHeight=30;b.Padding=new(4);b.Content=Paint.Text(name,12);paintBindings.Add(()=>{b.IsEnabled=hardware.Active&&hardware.SupportsBattery&&!hardwareBusy;b.Selected=hardware.State?.Upper==cap;});charge.Add(b);}var chargingGroup=Group("battery",()=>"电池健康",()=>hardware.State?.Upper is byte n?"上限 "+n+"%":"上限 —",PaintColumns(charge.ToArray()));BindCapability(chargingGroup,()=>hardware.SupportsBattery);page.Children.Add(chargingGroup);
         page.Children.Add(PaintColumns(new[]{"boost","camera","mic","win","awake","screen"}.Select(k=>PaintQuickRow(k,true)).ToArray(),4));
         var status=PB("硬件接管状态",()=>{PaintNavigate("settings");if(mini)ToggleMini();return Task.CompletedTask;});
         status.MinHeight=22;status.Padding=new(6,1,6,1);status.CornerRadius=new(5);
@@ -210,4 +242,9 @@ public sealed partial class MainWindow
         tile.PointerReleased+=(_,_)=>Finish(true);tile.PointerCaptureLost+=(_,_)=>Finish(false);tile.PointerCanceled+=(_,_)=>Finish(false);void Escape(object sender,KeyRoutedEventArgs e){if(held&&e.Key==VirtualKey.Escape){Finish(false);e.Handled=true;}}root.KeyDown+=Escape;void Blur(object sender,WindowActivatedEventArgs e){if(e.WindowActivationState==WindowActivationState.Deactivated)Finish(false);}Activated+=Blur;tile.Unloaded+=(_,_)=>{root.KeyDown-=Escape;Activated-=Blur;};
     }
 }
+
+
+
+
+
 

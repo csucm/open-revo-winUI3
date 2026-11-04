@@ -25,12 +25,12 @@ public sealed partial class MainWindow
             if(!toggle.IsOn)
             {
                 hardware.Release();tuningBaseline=null;tuningDraft=null;
-                quickState=quickState with{Camera=null,WinLocked=null};
+                quickState=quickState with{Camera=null};
                 hardwareMessage="已停止本次硬件控制。";UpdateControlValues();return;
             }
             toggle.IsEnabled=false;
             await RunHardware(()=>{var state=hardware.Takeover();if(!hardware.CoreDelegated)hardware.ProbePerformance();return new{connected=hardware.Active,state};},"已重新读取并接管。");
-            if(hardware.Active){await LoadPanelHardware();quickState=await Task.Run(ReadQuickState);}
+            if(hardware.Active){await LoadPanelHardware();ApplyQuickRead(await Task.Run(ReadQuickState));}
             }
             finally{takeoverChanging=false;if(!closed)UpdateControlValues();}
         };
@@ -52,6 +52,13 @@ public sealed partial class MainWindow
             hardwareMessage=success;controlAt=DateTimeOffset.Now;ecEnabled=true;lastEc=DateTimeOffset.MinValue;
             if(hardware.State is {} state)ec=ec with{BatteryLimit=state.Upper,FanBoost=state.FanBoost};
             if(actions.Count>128)actions.RemoveRange(0,actions.Count-128);
+        }
+        catch(AcPowerRequiredException error)
+        {
+            trace.Complete(new{outcome="ac-power-required"});
+            hardwareMessage=error.Message;
+            actions.Add($"{DateTimeOffset.Now:O} hardware operation blocked: {error.Message}");
+            if(!closed)await ShowMessage("需要接通电源",error.Message);
         }
         catch(Exception error)
         {

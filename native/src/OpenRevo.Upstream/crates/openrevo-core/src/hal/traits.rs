@@ -98,6 +98,10 @@ pub trait MechrevoHardwareHAL: Send + Sync {
         None
     }
 
+    /// Live firmware reads. Cached settings must not be returned here.
+    fn read_live_fn_lock(&self) -> Option<bool> { None }
+    fn read_live_monochrome_backlight(&self) -> Option<u8> { None }
+
     /// Query if underlying hardware driver/EC is accessible
     fn is_hardware_supported(&self) -> bool;
 }
@@ -117,6 +121,10 @@ pub trait HardwareDriver: MechrevoHardwareHAL + Send + Sync {
     /// Read active performance mode
     fn get_performance_mode(&self) -> Result<HardwarePowerMode, HalError>;
 
+    /// Read a live performance mode without cached or default values.
+    fn read_live_performance_mode(&self) -> Option<HardwarePowerMode> { None }
+    /// Read a hardware temperature without fallback estimates.
+    fn read_live_cpu_temp(&self) -> Option<u8> { None }
     /// Read CPU package temperature in Celsius
     fn read_cpu_temp(&self) -> Result<u8, HalError>;
 
@@ -143,3 +151,5 @@ pub trait HardwareDriver: MechrevoHardwareHAL + Send + Sync {
         self.set_keyboard_rgb(r, g, b)
     }
 }
+
+

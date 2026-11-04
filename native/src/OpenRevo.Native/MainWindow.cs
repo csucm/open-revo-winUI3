@@ -109,7 +109,7 @@ public sealed partial class MainWindow : Window
         AddNavigation("灯光与设备", "devices", Symbol.Keyboard);
         AddNavigation("插件兼容", "plugins", Symbol.Library);
         AddNavigation("设置与诊断", "settings", Symbol.Setting);
-        var footer = Ui.Text("原生版 0.9.8", 12, muted: true);
+        var footer = Ui.Text("原生版 0.9.84", 12, muted: true);
         footer.Margin = new Thickness(16, 8, 8, 16); navigation.PaneFooter = null;
         scroll.Content = page; navigation.Content = scroll;
         scroll.SizeChanged += (_,_) => QueueDesktopViewport();
@@ -128,7 +128,7 @@ public sealed partial class MainWindow : Window
             if(upstream!=null&&!desktopRuntimeClosed){args.Cancel=true;_ = CloseDesktopRuntime();}
         };
         Activated += (_,_)=>{windowBrandIcon?.Apply();if(!panelShapeChanging){AlignCaption();ResetCaptionHover();}};
-        Closed += (_,_)=>{panelMotionStop?.Cancel();panelCompositionGuard?.Dispose();extensionHost?.Dispose();windowBrandIcon?.Dispose();};
+        Closed += (_,_)=>{HidePanelHandoff();panelCompositionGuard?.Dispose();extensionHost?.Dispose();windowBrandIcon?.Dispose();};
         Closed += (_, _) => { closed = true;DisposeTray(); DetachDesktopPowerEvents();timer.Stop(); powerTimer?.Stop();capsLockObserver?.Dispose(); nativeOsd?.Dispose();lightingDebounce?.Cancel(); try {sessionPower?.Dispose();}finally{screenOffPower?.Dispose();} _ = Task.Run(() => { temperatures.Dispose(); upstream?.Dispose(); }); };
         root.Loaded += async (_, _) =>
         {
@@ -328,74 +328,12 @@ public sealed partial class MainWindow : Window
     private void RenderSettings()=>RenderSystemSettings();
     private void ToggleMini()
     {
-        if(closed||panelShapeChanging)return;
+        if (closed) return;
+        if (panelShapeChanging) { SetPanelGoal(!panelGoalMini); return; }
         CloseCaptionExpandTip();
-        bool wasVisible=AppWindow.IsVisible,showFallback=false;
-        var startBounds=new RectInt32(AppWindow.Position.X,AppWindow.Position.Y,AppWindow.Size.Width,AppWindow.Size.Height);
-        bool animate=wasVisible&&initialized&&Design.MotionEnabled;
-        ResetCaptionHover();
-        double previousWidth=root.Width,previousHeight=root.Height;
-        panelShapeChanging=true;
-        MotionDesign.Reset(page);page.Opacity=1;
-        void ProtectComposition()
-        {
-            if(panelCompositionGuard!=null||(!wasVisible&&!initialized))return;
-            panelCloakStarted=System.Diagnostics.Stopwatch.GetTimestamp();
-            panelCompositionGuard=new PanelCompositionGuard(captionWindow,cloak:!animate);
-            if(!animate&&!panelCompositionGuard.Cloaked&&wasVisible){AppWindow.Hide();showFallback=true;}
-        }
-        try
-        {
-        ProtectComposition();
-        if(!mini&&AppWindow.Presenter is OverlappedPresenter restore&&restore.State!=OverlappedPresenterState.Restored){ProtectComposition();restore.Restore();}
-        mini = !mini;
-        if (mini)
-        {
-            developerShape="real";
-            normalBounds = new(AppWindow.Position.X, AppWindow.Position.Y, AppWindow.Size.Width, AppWindow.Size.Height);
-            navigation.PaneDisplayMode = NavigationViewPaneDisplayMode.LeftMinimal;
-            navigation.IsPaneOpen = false; navigation.IsPaneVisible = false;
-            page.Padding = new Thickness(12, 4, 12, 10); page.Spacing = 6;
-            captionLabel.Text = "Open-Revo";miniLabel.Visibility=Visibility.Visible;
-            captionLabel.FontSize = 13;
-        }
-        else
-        {
-            navigation.IsPaneVisible = true; navigation.PaneDisplayMode = NavigationViewPaneDisplayMode.Left; navigation.IsPaneOpen = true;
-            captionLabel.Text = "Open-Revo";
-            miniLabel.Visibility=Visibility.Collapsed;
-            captionLabel.FontSize = 14;
-            page.Padding = new Thickness(28); page.Spacing = 18;var minimum=MinimumDesktopPixels();normalBounds.Width=Math.Max(normalBounds.Width,minimum.Width);normalBounds.Height=Math.Max(normalBounds.Height,minimum.Height);
-        }
-        UpdatePanelToggle(); Render();
-        var targetBounds=mini?MiniPanelBounds():normalBounds;
-        panelTargetPixelWidth=targetBounds.Width;
-        PreparePanelLayout(targetBounds);
-        ProtectComposition();
-        Title=mini?"Open-Revo Mini":"Open-Revo";
-        if(AppWindow.Presenter is OverlappedPresenter presenter){presenter.IsMaximizable=!mini||captionModeAttached;presenter.IsResizable=!mini;}
-        if(animate)
-        {
-            AppWindow.MoveAndResize(startBounds);
-            PreparePanelLayout(targetBounds);
-            panelShapeCompletion=AnimatePanelContinuity(startBounds,targetBounds,previousWidth,previousHeight,showFallback);
-            return;
-        }
-        lastPanelMotionFrames=0;
-        AppWindow.MoveAndResize(targetBounds);
-        root.Width=previousWidth;root.Height=previousHeight;
-        AlignCaption();ArrangeDesktopViewport();root.UpdateLayout();
-        if(panelCompositionGuard!=null)panelShapeCompletion=FinishPanelShape(showFallback);
-        else {panelShapeChanging=false;panelTargetPixelWidth=0;}
-        }
-        catch
-        {
-            root.Width=previousWidth;root.Height=previousHeight;
-            panelTargetPixelWidth=0;
-            panelCompositionGuard?.Dispose();panelCompositionGuard=null;panelShapeChanging=false;
-            if(showFallback&&!closed&&!trayHidden)AppWindow.Show();
-            throw;
-        }
+        panelGoalMini = !mini;
+        panelShapeChanging = true;
+        panelShapeCompletion = RunPanelHandoff(AppWindow.IsVisible && initialized && Design.MotionEnabled);
     }
     private void UpdatePanelToggle()
     {
@@ -460,6 +398,8 @@ public sealed partial class MainWindow : Window
     }
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
 }
+
+
 
 
 

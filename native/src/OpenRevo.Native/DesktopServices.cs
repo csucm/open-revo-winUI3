@@ -37,7 +37,7 @@ public sealed partial class MainWindow
                 exitRequested=false;
                 WakeFromTray(mini?"mini":"full");
                 DiagnosticLog.Record("exit.recovery.visible",new{mini});
-                await ShowMessage("退出前恢复色彩",error.Message);
+                await ShowMessage("退出前恢复桌面状态",error.Message);
             }
         }
         finally{closingDesktopRuntime=false;}

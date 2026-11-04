@@ -1,4 +1,4 @@
-namespace OpenRevo.Core.Hal;
+﻿namespace OpenRevo.Core.Hal;
 
 public sealed record DeviceSwitchState(bool WinKeyLocked, bool CameraPowered);
 public sealed partial class HardwareSession
@@ -10,13 +10,31 @@ public sealed partial class HardwareSession
         ((ec.Read(Vault.CameraCutoff) ?? throw new IOException("相机供电状态读取失败。")) & Vault.CameraCutoffMask) == 0);
     public DeviceSwitchState ProbeSwitches() => Serialized(() =>
     {
+        if(CoreDelegated)throw new NotSupportedException("当前驱动未提供传统 EC 开关状态。");
         Guard(); using var ec=open();
         if(!MatchesProject(Read(ec).Project))throw new IOException("设备不匹配。");
         return ReadSwitches(ec);
     });
-    public DeviceSwitchState SetWinKeyLocked(bool locked) => Serialized(() =>
+    public bool ProbeSoftwareWinLock() => CoreMachine.Library.NativeWinLock();
+    public DeviceSwitchState SetWinKeyLocked(bool locked,Action<bool>? softwareApplied=null)
+    {
+        if(useCoreAdmission&&fixtureAdmission==null)
+            throw new NotSupportedException("Win 软件锁已移至 Windows 键盘接口，不通过硬件会话设置。");
+        return SetTransportWinKeyLocked(locked,softwareApplied);
+    }
+    // Legacy EC-only contract for injected transports; production uses software lock.
+    private DeviceSwitchState SetTransportWinKeyLocked(bool locked,Action<bool>? softwareApplied) => Serialized(() =>
     {
         if(!Active)throw new InvalidOperationException("请先连接硬件。");
+        if(CoreDelegated)
+        {
+            Guard();
+            bool state=CoreMachine.Library.NativeWinLock(locked);
+            if(state!=locked)throw new IOException("Core Win 键锁状态未确认改变。");
+            softwareApplied?.Invoke(state);
+            audit(new{at=DateTimeOffset.Now,operation="core-software-win-lock",locked});
+            return new(state,false);
+        }
         Guard(); using var ec=open();
         if(!MatchesProject(Read(ec).Project))throw new IOException("设备不匹配。");
         var before=ReadSwitches(ec);

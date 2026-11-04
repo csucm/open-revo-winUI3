@@ -48,29 +48,31 @@ public sealed partial class MainWindow
     private void RememberPanelShape()
     {
         if(uiReviewMode)return;
-        systemPreferences=systemPreferences with{LastMini=mini};
+        systemPreferences=systemPreferences with{LastMini=panelShapeChanging?panelGoalMini:mini};
         try{systemPreferences.Save();}catch(Exception error){actions.Add("窗口记忆："+error.Message);}
     }
     private bool HideToTray()
     {
         if(uiReviewMode&&!trayReviewMode||exitRequested||settingsDataBusy||dataStorageExitPending)return false;
         if(!trayAvailable)AddTrayIcon();if(!trayAvailable){_=ShowMessage("托盘不可用","图标创建失败，窗口保持可见；可在设置页退出程序。");return false;}
-        RememberPanelShape();ResetCaptionHover();trayHidden=true;panelMotionStop?.Cancel();AppWindow.Hide();UpdatePolling();return true;
+        RememberPanelShape();ResetCaptionHover();trayHidden=true;HidePanelHandoff();AppWindow.Hide();UpdatePolling();return true;
     }
     internal void StartHiddenToTray()=>DispatcherQueue.TryEnqueue(()=>HideToTray());
     private void WakeFromTray(string? mode=null)
     {
         if(closed||exitRequested)return;
         string preferred=mode??systemPreferences.WakeMode;bool targetMini=preferred=="mini"||preferred=="remember"&&systemPreferences.LastMini;
+        bool refreshAfterHidden = trayHidden && !lowRefreshOnBattery;
         trayHidden=false;
-        if(mini!=targetMini)ToggleMini();
+        if(panelShapeChanging)SetPanelGoal(targetMini);else if(mini!=targetMini)ToggleMini();
         if(AppWindow.Presenter is OverlappedPresenter presenter&&presenter.State==OverlappedPresenterState.Minimized)presenter.Restore();
         ResetCaptionHover();AppWindow.Show();Activate();SetForegroundWindow(captionWindow);UpdatePolling();
+        if (refreshAfterHidden) _ = CheckAutomaticRefresh();
     }
     private bool RuntimeBusy=>panelShapeChanging||trayHoverRead is {IsCompleted:false}||updateBusy||hardwareBusy||quickBusy||requestedWinLocked.HasValue||takeoverChanging||tuningApplying||displayBusy||brightnessApplying||gpuChanging||desktopServiceBusy||sleepOfficeBusy||settingsDataBusy||settingsPowerBusy||batteryGuardBusy;
     private async Task ExitFromTray()
     {
-        if(exitInProgress||closed)return;exitInProgress=true;exitRequested=true;
+        if(exitInProgress||closed)return;exitInProgress=true;exitRequested=true;HidePanelHandoff();
         var watch=System.Diagnostics.Stopwatch.StartNew();
         DiagnosticLog.Record("exit.requested",ExitDiagnosticState());
         try
@@ -131,5 +133,6 @@ public sealed partial class MainWindow
     [DllImport("user32.dll")]private static extern bool DestroyMenu(nint menu);
     [StructLayout(LayoutKind.Sequential)]private struct TrayPoint{public int X,Y;}
 }
+
 
 

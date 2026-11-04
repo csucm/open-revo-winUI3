@@ -16,7 +16,7 @@
     <DefaultItemExcludes>$(DefaultItemExcludes);bin*/**;obj/**</DefaultItemExcludes>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <PublishTrimmed>false</PublishTrimmed><PublishReadyToRun>false</PublishReadyToRun>
-    <Version>0.9.8</Version><Description>Open-Revo native control panel</Description>
+    <Version>0.9.85</Version><Description>Open-Revo native control panel</Description>
     <Title>Open-Revo</Title><Product>Open-Revo</Product><Company>Open-Revo Community</Company>
   </PropertyGroup>
   <PropertyGroup Condition="'$(DesignReviewHost)'=='true'">
@@ -51,10 +51,11 @@
     <Content Update="Assets/Nav/LUCIDE-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
 
   </ItemGroup>
-  <Target Name="PublishUnpackagedXamlResources" AfterTargets="Publish">
+  <Target Name="PublishUnpackagedXamlResources" AfterTargets="Publish" Condition="'$(PublishSingleFile)'!='true'">
     <Error Condition="!Exists('$(TargetDir)App.xbf') Or !Exists('$(TargetDir)$(AssemblyName).pri')" Text="Compiled XAML resources are missing; refusing to publish an incomplete app." />
     <Copy SourceFiles="$(TargetDir)App.xbf;$(TargetDir)$(AssemblyName).pri" DestinationFolder="$(PublishDir)" />
   </Target>
 </Project>
+
 
 

@@ -33,9 +33,21 @@ public sealed partial class MainWindow
     {
         if(id=="fan")return OverviewCard(SuiteVisuals.Stack(8,Ui.Text("散热",14,true),Ui.Row(Ui.Text("CPU 风扇",12,muted:true),OverviewNumber(OverviewValue("overviewCpuFan",16),"RPM")),Ui.Row(Ui.Text("GPU 风扇",12,muted:true),OverviewNumber(OverviewValue("overviewGpuFan",16),"RPM"))));
         string prefix=id=="vram"?"overviewMemory":"overview"+(id=="cpu"?"Cpu":"Gpu");
-        var mhz=OverviewValue(prefix+"Mhz",12);var head=Ui.Row(Ui.Text(tileTitles[id],14,true),OverviewNumber(mhz,"MHz"));
-        var number=id=="vram"?OverviewNumber(OverviewValue("overviewVramUsed",24),"/ — GB","overviewVramTotal"):OverviewNumber(OverviewValue(prefix+"Temp",24),"°C");
-        var foot=Ui.Row(OverviewValue(id=="vram"?"overviewVramUsage":prefix+"Usage",12),id=="vram"?Ui.Text("专用显存",12,muted:true):OverviewValue(prefix+"Power",12));
+        var mhz=OverviewValue(prefix+"Mhz",12);
+        var title = id switch
+        {
+            "vram" => OverviewValue("overviewVramTitle",14),
+            "gpu" => OverviewValue("overviewGpuTitle",14),
+            _ => Ui.Text(tileTitles[id],14,true)
+        };
+        if (id == "gpu")
+        {
+            title.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+            title.TextTrimming = TextTrimming.CharacterEllipsis;
+        }
+        var head=Ui.Row(title,OverviewNumber(mhz,"MHz"));
+        var number=id=="vram"?OverviewNumber(OverviewValue("overviewVramUsed",24),$"/ — {OverviewMemoryUnit}","overviewVramTotal"):OverviewNumber(OverviewValue(prefix+"Temp",24),"°C");
+        var foot=Ui.Row(OverviewValue(id=="vram"?"overviewVramUsage":prefix+"Usage",12),id=="vram"?OverviewValue("overviewVramNote",12):OverviewValue(prefix+"Power",12));
         var bar=new ProgressBar{Minimum=0,Maximum=100,Height=3};if(id=="cpu")desktopCpuBar=bar;else if(id=="gpu")overviewGpuBar=bar;else overviewVramBar=bar;
         var card=OverviewCard(SuiteVisuals.Stack(8,head,number,foot,bar));card.MinHeight=120;return card;
     }
@@ -54,7 +66,7 @@ public sealed partial class MainWindow
             var value=Value("battery",24);value.FontWeight=Microsoft.UI.Text.FontWeights.Normal;
             var sub=Value("batteryDetail",12);sub.FontWeight=Microsoft.UI.Text.FontWeights.Normal;
             var limit=Ui.Button("充电上限",(_,_)=>{});var limitText=Value("approvedBatteryLimit",12);limitText.FontWeight=Microsoft.UI.Text.FontWeights.Normal;limit.Content=Ui.Row(Ui.Text("充电上限",12),SettingsControls(limitText,ApprovedIcons.Utility("chevron",13)));SuiteVisuals.Flat(limit);
-            var choices=new MenuFlyout();foreach(int cap in new[]{100,80,60}){var item=new MenuFlyoutItem{Text=$"充电上限 {cap}%"};item.Click+=async(_,_)=>await RunHardware(()=>hardware.SetBatteryPreset(cap),"充电上限已回读确认。");choices.Items.Add(item);}limit.Flyout=choices;limit.IsEnabled=hardware.Active&&hardware.SupportsBattery;
+            var choices=new MenuFlyout();foreach(int cap in new[]{100,80,60}){var item=new MenuFlyoutItem{Text=$"充电上限 {cap}%"};item.Click+=async(_,_)=>await RunHardware(()=>hardware.ApplyBatteryCommand(cap),hardware.CoreDelegated?"Core 已发送充电上限命令。":"充电上限已回读确认。");choices.Items.Add(item);}limit.Flyout=choices;limit.IsEnabled=hardware.Active&&hardware.SupportsBattery;
             var plan=Ui.Button("Windows 电源计划",(_,_)=>{currentPage="settings";Render();});plan.Content=Ui.Row(Ui.Text("Windows 电源计划",12),ApprovedIcons.Utility("chevron",13));SuiteVisuals.Flat(plan);
             var controls=SuiteVisuals.Rule(SuiteVisuals.Stack(1,limit,plan),4);
             var glance=SettingsControls(MiniBatteryPicture(),value);glance.Spacing=12;
@@ -114,7 +126,7 @@ public sealed partial class MainWindow
             {
                 Button b;
                 if(key is "camera" or "mic" or "win" or "awake" or "screen")b=QuickActionButton(key);
-                else if(key=="boost")b=overviewBoost=Ui.Button("一键强冷",async(_,_)=>await RunHardware(()=>hardware.SetFanBoost(!(hardware.State?.FanBoost??ec.FanBoost??false)),"强冷状态已回读确认。"));
+                else if(key=="boost")b=overviewBoost=Ui.Button("一键强冷",async(_,_)=>await RunHardware(()=>hardware.ApplyFanBoostCommand(!(hardware.State?.FanBoost??ec.FanBoost??hardware.RequestedFanBoost??false)),hardware.CoreDelegated?"Core 已发送强冷命令。":"强冷状态已回读确认。"));
                 else b=ExtraSwitchButton(key,key=="touchpad"?"触摸板":key=="fn"?"F1–F12 模式":"OSD 提示","");
                 body.Children.Add(b);
             }
@@ -165,3 +177,4 @@ internal sealed class OverviewBoard:Panel
     }
     protected override Size ArrangeOverride(Size final){for(int i=0;i<ordered.Length&&i<slots.Count;i++)ordered[i].Arrange(slots[i]);return final;}
 }
+

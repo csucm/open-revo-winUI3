@@ -1,4 +1,4 @@
-using Microsoft.UI.Xaml;
+﻿using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using OpenRevo.Core;
@@ -45,12 +45,13 @@ public sealed partial class MainWindow
     private async Task PaintTakeover(bool acquire)
     {
         if(uiReviewMode||takeoverChanging||closed)return;takeoverChanging=true;automaticTakeoverPending=false;
-        try{if(!acquire){hardware.Release();tuningBaseline=null;tuningDraft=null;quickState=quickState with{Camera=null,WinLocked=null};hardwareMessage="已停止本次硬件控制。";return;}await RunHardware(()=>{var state=hardware.Takeover();if(!hardware.CoreDelegated)hardware.ProbePerformance();return new{connected=hardware.Active,state};},"已重新读取并接管。");if(hardware.Active){await LoadPanelHardware();quickState=await Task.Run(ReadQuickState);}}
+        try{if(!acquire){hardware.Release();tuningBaseline=null;tuningDraft=null;quickState=quickState with{Camera=null};hardwareMessage="已停止本次硬件控制。";return;}await RunHardware(()=>{var state=hardware.Takeover();if(!hardware.CoreDelegated)hardware.ProbePerformance();return new{connected=hardware.Active,state};},"已重新读取并接管。");if(hardware.Active){await LoadPanelHardware();ApplyQuickRead(await Task.Run(ReadQuickState));}}
         finally{takeoverChanging=false;RefreshPaintedState();}
     }
     private void RenderPaintedUpdates()
     {
         var check=PB("检查更新",async()=>{if(!uiReviewMode)await CheckNativeUpdate();});var install=PB("下载并安装",async()=>{if(!uiReviewMode)await DownloadNativeUpdate();});var cancel=new PaintButton("取消下载",()=>updateCancellation?.Cancel());paintBindings.Add(()=>{check.IsEnabled=!updateBusy;install.IsEnabled=!updateBusy&&availableUpdate!=null;cancel.IsEnabled=updateCancellation!=null;});
-        page.Children.Add(PaintSection("软件更新","info",Paint.Stack(14,PT(()=>"当前版本 "+typeof(App).Assembly.GetName().Version?.ToString(3),12,muted:true),Paint.Inline(8,check,install,cancel),PT(()=>updateMessage,12,muted:true),PB("发布页",()=>OpenSettings(ReleaseUpdater.ReleasesPage)),new PaintButton("打开下载与安装日志",()=>{if(!uiReviewMode)OpenLocalFolder(Path.Combine(AppData.DirectoryPath,"updates"));}))));
+        page.Children.Add(PaintSection("软件更新","info",Paint.Stack(14,PT(()=>"当前版本 "+BuildInfo.DisplayVersion,12,muted:true),Paint.Inline(8,check,install,cancel),PT(()=>updateMessage,12,muted:true),PB("发布页",()=>OpenSettings(ReleaseUpdater.ReleasesPage)),new PaintButton("打开下载与安装日志",()=>{if(!uiReviewMode)OpenLocalFolder(Path.Combine(AppData.DirectoryPath,"updates"));}))));
     }
 }
+

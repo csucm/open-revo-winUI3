@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenRevo.Core;
 using OpenRevo.Core.Hal;
@@ -16,6 +16,7 @@ public sealed partial class MainWindow
     private long gpuSavedAt;
     private bool gpuChanging;
     private bool gpuReadFresh;
+    private bool UsesDeclaredGpuMux => hardware.CoreDelegated && CoreMachine.Current.Manifest is not (null or "");
     private GpuBootState? gpuBoot;
     private GpuRuntimeCapabilities? gpuRuntime;
     private int GpuRuntimeMode=>gpuBoot?.InitialMode==3?3:gpuRuntime is {HybridIgpuSupported:true,IgpuActive:bool active}?(active?1:2):gpuBoot?.InitialMode??0;
@@ -30,6 +31,7 @@ public sealed partial class MainWindow
         try
         {
             upstream ??= new UpstreamCoreLibrary(Path.Combine(AppContext.BaseDirectory, "openrevo_native_bridge.dll"));
+            if(quickState.WinLocked==null)await RefreshWindowsWinLock();
             var caps = await Task.Run(() => upstream.Read(5));
             string? modelHint = null;
             var catalog = await Task.Run(() => upstream.Read(6));
@@ -38,8 +40,20 @@ public sealed partial class MainWindow
                     modelHint=hint.GetString();
             keyboard = KeyboardCapability.Detect(caps.GetProperty("per_key").GetBoolean(), caps.GetProperty("four_zone").GetBoolean(),
                 hardware.State is { } state && (state.Support2 & Vault.SingleZoneSupportMask) != 0, modelHint);
+            if(hardware.CoreDelegated && CoreMachine.Current.MonochromeLevels is { } levels)
+            {
+                keyboard=KeyboardCapability.Detect(false,false,false,"White");
+                monochromeLevels=levels;
+                extraSwitches=await Task.Run(upstream.ReadOverviewSwitches);
+                UpdateMonochromeReadback(extraSwitches);
+            }
+            else if(hardware.SupportsDeclaredRgb)
+            {
+                keyboard=new("SingleZone","单区 RGB",true,false);
+                lightingProbeError="可发送 RGB 灯效和颜色命令，当前状态未知。";
+            }
             DiagnosticLog.Record("lighting.detected",new{kind=keyboard.Kind,caps,modelHint,support2=hardware.State?.Support2,connected=hardware.Active});
-            if (keyboard.Kind == "SingleZone")
+            if (keyboard.Kind == "SingleZone"&&!hardware.SupportsDeclaredRgb)
             {
                 try
                 {
@@ -59,8 +73,8 @@ public sealed partial class MainWindow
             {
                 gpuState=await Task.Run(upstream.ReadGpuMode);
                 gpuReadFresh=gpuState.Known;
-                if(!gpuState.Known)gpuState=GpuModeCache.Read()??gpuState;
-                if(gpuReadFresh)
+                if(!UsesDeclaredGpuMux&&!gpuState.Known)gpuState=GpuModeCache.Read()??gpuState;
+                if(gpuReadFresh&&!UsesDeclaredGpuMux)
                 {
                     gpuBoot=GpuBootStateStore.Open(gpuState.Mode,requestedGpu,gpuSavedAt);
                     if(!uiReviewMode)GpuBootStateStore.Save(gpuBoot);
@@ -104,6 +118,21 @@ public sealed partial class MainWindow
     private async Task RunGpuRequest(int target)
     {
         if(closed||gpuChanging||(target!=0&&(!hardware.Active||!gpuReadFresh))||upstream==null)return;
+        if(UsesDeclaredGpuMux)
+        {
+            var core = upstream;
+            if(target == 0)
+            {
+                gpuState = await Task.Run(core.ReadGpuMode);
+                gpuReadFresh = gpuState.Known;
+                UpdateGpuControls();
+                return;
+            }
+
+            if(gpuState?.Supports(target) == true)
+                await RunHardware(() => hardware.ApplyDeclaredGpuMux(target, core), "Core 已发送显卡模式命令。请刷新读取状态。");
+            return;
+        }
         if(target!=0&&gpuState?.Mode==target&&(target==3||GpuRuntimeMode==target||gpuRuntime?.HybridIgpuSupported!=true||gpuBoot?.InitialMode==3))return;
         await operationQueue.WaitAsync();
         if(closed){operationQueue.Release();return;}
@@ -179,13 +208,28 @@ public sealed partial class MainWindow
         {
             lastTemperature=DateTimeOffset.Now;
             bool sampleGpu = latest?.OnAc == true && ec.GpuFan is > 0;
-            temperatureTask=Task.Run(()=>temperatures.Read(sampleGpu));
+            var core=upstream;
+            temperatureTask=Task.Run(()=>{
+                var reading=temperatures.Read(sampleGpu);
+                try
+                {
+                    var live=core?.Read(24);
+                    if(live is {ValueKind:System.Text.Json.JsonValueKind.Number} value&&value.TryGetInt32(out int cpu))
+                        return reading with{Cpu=cpu,CpuSource="Core 硬件温度"};
+                }
+                catch(Exception error){DiagnosticLog.Failure("temperature.core",error,throttle:true);}
+                return reading;
+            });
         }
         string Temp(int? value) => value is int n ? $"{n}°C" : "—";
         string Fan(int? value) => value is int n ? $"fans: {n} RPM" : "fans: — RPM";
         Put("miniCpu",$"CPU {Temp(temperature.Cpu)} · {Fan(ec.CpuFan)}");
         Put("miniGpu",$"GPU {Temp(temperature.Gpu)} · {Fan(ec.GpuFan)}");
-        Put("cpuTemperature",$"CPU 温区 {Temp(temperature.Cpu)}");
+        Put("cpuTemperature",$"{temperature.CpuSource} {Temp(temperature.Cpu)}");
         Put("gpuTemperature",temperature.Gpu.HasValue ? Temp(temperature.Gpu) : "休眠或暂不可用");
     }
 }
+
+
+
+

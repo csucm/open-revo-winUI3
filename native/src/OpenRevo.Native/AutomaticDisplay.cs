@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Dispatching;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenRevo.Core;
@@ -34,6 +34,7 @@ public sealed partial class MainWindow
     private async Task CheckAutomaticRefresh(bool force = false)
     {
         if (closed || !hardware.Active || powerCheckRunning || displayBusy || brightnessApplying) return;
+        if (trayHidden && !lowRefreshOnBattery && !automaticRefresh.NeedsEvaluationWhenDisabled) return;
         bool? ac = Telemetry.ReadAc();
         if (!force && ac == lastPower && DateTimeOffset.Now-lastPolicyCheck < TimeSpan.FromSeconds(10)) return;
         powerCheckRunning = true; lastPower = ac; lastPolicyCheck = DateTimeOffset.Now;
@@ -56,7 +57,7 @@ public sealed partial class MainWindow
     {
         powerTimer = DispatcherQueue.CreateTimer(); powerTimer.Interval = TimeSpan.FromSeconds(3);
         SampleResources();
-        powerTimer.Tick += async (_, _) => { SampleResources(); RestoreScreenRequestOnInput(); await CheckAutomaticRefresh(); await RetryStartupTakeover(); await SyncPerformanceOverlay();await EnforceBatteryPerformanceGuard(); }; powerTimer.Start();
+        powerTimer.Tick += async (_, _) => { SampleResources(); RestoreScreenRequestOnInput(); await CheckAutomaticRefresh(); await RetryStartupTakeover(); await SyncPerformanceOverlay();await EnforceBatteryPerformanceGuard(); await RestoreDeclaredTuningOnAc(); }; powerTimer.Start();
     }
     private void UpdateDisplayValues()
     {

@@ -21,6 +21,11 @@ public sealed partial class MainWindow
         if(message!=0x0218||closed||settingsDataBusy||settingsPowerBusy)return;
         bool? sleeping=wParam switch{4=>true,7 or 18=>false,_=>null};
         if(wParam==0x8013&&lParam!=0&&Marshal.PtrToStructure<Guid>(lParam)==LidPowerGuid&&Marshal.ReadInt32(lParam,16)==4)sleeping=Marshal.ReadInt32(lParam,20)==0;
+        if(sleeping is bool suspended&&suspended!=declaredPowerSuspended)
+        {
+            declaredPowerSuspended=suspended;
+            declaredRestoreAc=null;
+        }
         if(sleeping.HasValue&&(desktopPreferences.SleepOffice||automaticOfficeReceipt!=null))
         {
             bool value=sleeping.Value;

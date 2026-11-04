@@ -176,7 +176,7 @@ unsafe fn set_single_clock_offset_raw(
     buf[2] = 1;
     buf[3] = 1;
     buf[7] = domain_id;
-    buf[10] = (delta_mhz * 1000) as u32;
+    buf[10] = delta_mhz.checked_mul(1000).ok_or(-5)? as u32; // NVAPI_INVALID_ARGUMENT
     let ret = (drv.set_pstates20)(drv.primary_gpu_handle, buf.as_ptr().cast());
     if ret == NVAPI_OK {
         Ok(())
@@ -253,6 +253,7 @@ pub fn parse_native_clock_state(words:&[u32])->Option<NativeClockState> {
         let mut core=None;let mut memory=None;
         for clock in 0..clocks {
             let c=start+2+clock*11;
+            if !matches!(words[c],CLOCK_DOMAIN_GRAPHICS|CLOCK_DOMAIN_MEMORY){continue;}
             let value=words[c+3] as i32;let min=words[c+4] as i32;let max=words[c+5] as i32;
             if min>max||value%1000!=0{return None;}
             let item=(value/1000,min.div_euclid(1000)+i32::from(min.rem_euclid(1000)!=0),max.div_euclid(1000),words[c+2]&1!=0);

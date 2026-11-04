@@ -10,6 +10,12 @@ public sealed partial class MainWindow
     {
         if(!hardware.Active||hardwareBusy||tuningApplying)return;
         if(mode!=4){await RunHardware(()=>hardware.ApplyModeCommand(upstream,mode,mode==3),"性能档位已回读确认。");return;}
+        if(hardware.DeclaredCpuTuning!=null)
+        {
+            if(hardware.SavedDeclaredTuning is {} preset)await ApplyDeclaredPreset(preset);
+            else OpenTuning();
+            return;
+        }
         try
         {
             if(upstream==null)throw new IOException("设备未连接。");

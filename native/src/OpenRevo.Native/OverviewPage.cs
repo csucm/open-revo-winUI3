@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using OpenRevo.Core;
 
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
@@ -120,21 +121,51 @@ public sealed partial class MainWindow
         var row=DesktopAlignedRow(leading,action);row.ColumnSpacing=8;
         var card=OverviewCard(row);card.Padding=new Thickness(12);return card;
     }
+    private OverviewGpu? CurrentOverviewGpu =>
+        overviewTelemetry is { } data && data.TopologyGeneration == DisplayTopology.GpuGeneration &&
+        DateTimeOffset.Now - overviewTelemetryAt < TimeSpan.FromSeconds(6) ? data.Gpu : null;
+
+    private string? IntegratedGpuModel =>
+        overviewTelemetry is { Gpu: { ShowsSharedMemory: true, AdapterName: { } name } } data &&
+        data.TopologyGeneration == DisplayTopology.GpuGeneration ? name : null;
+
+    private bool OverviewUsesSharedMemory => CurrentOverviewGpu?.ShowsSharedMemory == true || PaintIntegratedOnly;
+    private string OverviewMemoryTitle => OverviewUsesSharedMemory ? "共享 GPU 内存" : "显存";
+    private string OverviewMemoryUnit => OverviewUsesSharedMemory ? "GB" : "GiB";
+    private const double BytesPerGb = 1_000_000_000d;
+    private string OverviewMemoryNote => OverviewUsesSharedMemory
+        ? CurrentOverviewGpu is { TotalGiB: not null, MemoryTotalBytes: ulong reserved } ? $"专用预留 {reserved / BytesPerGb:0.0} GB" : ""
+        : "专用显存";
+
     private void UpdateOverviewValues()
     {
         RefreshPaintedState();
         if(mini||currentPage!="overview")return;
         var metrics=DateTimeOffset.Now-overviewTelemetryAt<TimeSpan.FromSeconds(6)?overviewTelemetry:null;
-        var cpu=metrics?.Cpu;var gpu=metrics?.Gpu;
+        var cpu=metrics?.Cpu;var gpu=CurrentOverviewGpu;
         Put("overviewCpuMhz",cpu?.Mhz?.ToString()??"—");
         Put("overviewCpuPower",cpu?.PowerW is double cw?$"{(cpu.PowerEstimated?"估算 ":"")}{cw:0.0} W":"— W");
         Put("overviewGpuMhz",gpu?.CoreMhz?.ToString()??"—");Put("overviewMemoryMhz",gpu?.MemoryMhz?.ToString()??"—");
+        if (live.TryGetValue("overviewGpuTitle", out var gpuTitle) && gpuTitle.Text != (gpu?.AdapterName ?? "GPU"))
+        {
+            gpuTitle.Text = gpu?.AdapterName ?? "GPU";
+            ToolTipService.SetToolTip(gpuTitle, gpu?.AdapterName);
+        }
         Put("overviewGpuPower",gpu?.PowerW is double gw?$"{gw:0.0} W":"— W");Put("overviewGpuUsage",gpu?.Usage is int gu?$"{gu}%":"—%");
-        Put("overviewVramUsed",gpu?.UsedGiB is double used?$"{used:0.0}":"—");Put("overviewVramTotal",gpu?.TotalGiB is double total?$"/ {total:0.0} GB":"/ — GB");
-        Put("overviewVramUsage",gpu?.MemoryPercent is double mp?$"{mp:0}%":"—%");
+        double? used = OverviewUsesSharedMemory
+            ? gpu is { ShowsSharedMemory: true, DisplayMemoryUsedGiB: not null } ? gpu.SharedUsedBytes / BytesPerGb : null
+            : gpu?.UsedGiB;
+        double? total = OverviewUsesSharedMemory
+            ? gpu is { ShowsSharedMemory: true, SharedLimitBytes: > 0 } ? gpu.SharedLimitBytes / BytesPerGb : null
+            : gpu?.TotalGiB;
+        Put("overviewVramUsed",used is double usedValue?$"{usedValue:0.0}":"—");
+        Put("overviewVramTotal",$"/ {(total is double totalValue ? $"{totalValue:0.0}" : "—")} {OverviewMemoryUnit}");
+        Put("overviewVramUsage",gpu?.DisplayMemoryPercent is double mp?$"{mp:0}%":"—%");
+        Put("overviewVramTitle",OverviewMemoryTitle);
+        Put("overviewVramNote",OverviewMemoryNote);
         if(overviewGpuBar!=null){overviewGpuBar.Value=gpu?.Usage??0;overviewGpuBar.Opacity=gpu?.Usage.HasValue==true?1:.35;}
-        if(overviewVramBar!=null){overviewVramBar.Value=gpu?.MemoryPercent??0;overviewVramBar.Opacity=gpu?.HasMemory==true?1:.35;}
-        Put("overviewCpuTemp",temperature.Cpu?.ToString()??"—");Put("overviewGpuTemp",temperature.Gpu?.ToString()??"—");
+        if(overviewVramBar!=null){overviewVramBar.Value=gpu?.DisplayMemoryPercent??0;overviewVramBar.Opacity=gpu?.DisplayMemoryPercent.HasValue==true?1:.35;}
+        Put("overviewCpuTemp",temperature.Cpu?.ToString()??"—");Put("overviewGpuTemp",gpu?.Temperature?.ToString()??"—");
         Put("overviewCpuUsage",latest?.CpuPercent is double cpuUsage?$"{cpuUsage:0}%":"—%");
         Put("overviewCpuFan",ec.CpuFan?.ToString()??"—");Put("overviewGpuFan",ec.GpuFan?.ToString()??"—");
         bool boost=(hardware.State?.FanBoost??ec.FanBoost)==true;

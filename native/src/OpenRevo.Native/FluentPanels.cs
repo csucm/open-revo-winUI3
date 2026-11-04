@@ -95,7 +95,7 @@ public sealed partial class MainWindow
         page.Children.Add(lightingCard);
         Button Charge(string label, int limit)
         {
-            var button = MiniControl(label, () => hardware.SetBatteryPreset(limit), limit switch { 60=>"充至60%停止，低于55%恢复；不主动放电",80=>"充至80%停止，低于75%恢复；不主动放电",_=>"允许充满，适合外出使用" });
+            var button = MiniControl(label, () => hardware.ApplyBatteryCommand(limit), limit switch { 60=>"充至60%停止，低于55%恢复；不主动放电",80=>"充至80%停止，低于75%恢复；不主动放电",_=>"允许充满，适合外出使用" });
             compactChargeButtons[limit] = button; return button;
         }
         page.Children.Add(Group("", "电池健康", Columns(Charge("工作站", 60), Charge("平衡", 80), Charge("长效", 100))));
@@ -103,7 +103,7 @@ public sealed partial class MainWindow
         {
             bool target = (hardware.State?.FanBoost ?? ec.FanBoost) != true;
             if (!hardware.Active) return;
-            await RunHardware(() => hardware.SetFanBoost(target), "强冷状态已回读确认。");
+            await RunHardware(() => hardware.ApplyFanBoostCommand(target), hardware.CoreDelegated?"Core 已发送强冷命令。":"强冷状态已回读确认。");
         });
         compactBoostButton.IsEnabled = !hardwareBusy && hardware.Active&&hardware.SupportsFanBoost;
         ToolTipService.SetToolTip(compactBoostButton,"点击提高风扇转速，再次点击恢复自动散热");
@@ -152,4 +152,5 @@ public sealed partial class MainWindow
         return AdaptiveLightingControls();
     }
 }
+
 

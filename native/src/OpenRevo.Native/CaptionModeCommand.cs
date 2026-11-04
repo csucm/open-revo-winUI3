@@ -82,7 +82,12 @@ public sealed partial class MainWindow
     private bool QueuePanelMinimize()
     {
         if(closed||exitRequested||sessionEnding)return false;
-        if(panelMinimizeQueued||panelShapeChanging)return true;
+        if(panelShapeChanging)
+        {
+            if(panelGoalMini)HideToTray();else SetPanelGoal(true);
+            return true;
+        }
+        if(panelMinimizeQueued)return true;
         bool fromMini=mini;panelMinimizeQueued=true;
         if(DispatcherQueue.TryEnqueue(async ()=>
         {
@@ -94,7 +99,7 @@ public sealed partial class MainWindow
                 {
                     if(!mini)ToggleMini();
                     await panelShapeCompletion;
-                    if(closed||exitRequested||sessionEnding)return;
+                    if(closed||exitRequested||sessionEnding||trayHidden)return;
                     trayHidden=false;ResetCaptionHover();AppWindow.Show();Activate();SetForegroundWindow(captionWindow);
                     RememberPanelShape();UpdatePolling();
                 }
@@ -112,6 +117,8 @@ public sealed partial class MainWindow
     private nint OnCaptionWindowMessage(nint hwnd,uint message,nuint wParam,nint lParam,nuint id,nuint data)
     {
         if(HandleTrayWindowMessage(message,wParam,lParam,out var trayResult))return trayResult;
+        if (message == 0x007E || message == 0x0219 && wParam == 0x0007)
+            OpenRevo.Core.DisplayTopology.InvalidateGpuIdentity(); // WM_DISPLAYCHANGE / DBT_DEVNODES_CHANGED
         if(message==0x0024)ApplyDesktopMinMax(lParam);
         HandleDesktopPowerMessage(message,wParam,lParam);
         if(mini&&!closed)

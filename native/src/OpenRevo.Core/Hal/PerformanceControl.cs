@@ -87,16 +87,24 @@ public sealed partial class HardwareSession
                 throw new InvalidOperationException("狂暴模式需要确认原装DC适配器，并检测到Windows交流供电；可在设置页明确确认后解除离电限制。");
         }
         CheckPower(); var desired = target(before);
-        if(!Enumerable.Range(1,3).Any(mode=>SameTables(desired.Fans,FactoryForMachine(desired.Fans,mode))) || desired.Fans.Latch!=4 || (desired.Fans.ApControl & 129)!=129 || desired.Fans.Custom!=64)
+        bool validTarget=UsesProductionClassicCore
+            ? CoreMachine.Library.RecognizesClassicFanProtocol(desired.Fans,true)
+            : Enumerable.Range(1,3).Any(mode=>SameTables(desired.Fans,FactoryForMachine(desired.Fans,mode)))
+                && desired.Fans.Latch==4 && (desired.Fans.ApControl&129)==129 && desired.Fans.Custom==64;
+        if(!validTarget)
             throw new InvalidOperationException("目标不是允许的工厂档位协议。");
         audit(new { at=DateTimeOffset.Now,operation="performance-intent",before,desired });
         try
         {
+            List<ClassicControlStep> steps=[];
+            void Flush()=>FlushClassicControls(rootState.Project,steps);
             void Write(ushort a, int value)
             {
+                int ignore=a==Vault.Trigger?Vault.RgbEnableMask|Vault.SilentMask:a==Vault.SilentFlag?1:0;
+                if(UsesProductionClassicCore){steps.Add(new(a,checked((byte)value),ignore));return;}
                 Guard();
                 if (!ec.Write(a,checked((byte)value))) throw new IOException("档位写入失败。");
-                var actual=ec.Read(a); int ignore=a==Vault.Trigger ? Vault.RgbEnableMask|Vault.SilentMask : a==Vault.SilentFlag ? 1 : 0;
+                var actual=ec.Read(a);
                 if (!actual.HasValue || (actual.Value & ~ignore)!=(value & ~ignore)) throw new IOException("档位回读失败。");
             }
             // Keep physical cooling clamped until the complete table is committed.
@@ -104,11 +112,14 @@ public sealed partial class HardwareSession
             Write(Vault.FanLatch,4); Write(Vault.FanLatch,0); Write(Vault.ApControl,desired.Fans.ApControl);
             var tables=new[] {(Vault.CpuUpBase,desired.Fans.CpuUp),(Vault.CpuDownBase,desired.Fans.CpuDown),(Vault.CpuDutyBase,desired.Fans.CpuDuty),
                 (Vault.GpuUpBase,desired.Fans.GpuUp),(Vault.GpuDownBase,desired.Fans.GpuDown),(Vault.GpuDutyBase,desired.Fans.GpuDutyAndControl)};
-            foreach(var (start,values) in tables) for(int i=0;i<16;i++) Write((ushort)(start+i),values[i]);
+            Flush();
+            if(UsesProductionClassicCore)WriteClassicFanTables(rootState.Project,tables);
+            else foreach(var (start,values) in tables) for(int i=0;i<16;i++) Write((ushort)(start+i),values[i]);
             CheckPower();
             Write(Vault.CustomMode,desired.Fans.Custom); Write(Vault.FanIsolated,desired.Fans.Isolated); Write(Vault.FanRamp,desired.Fans.Ramp);
             Write(Vault.ModeIndex,desired.Fans.ModeIndex); Write(Vault.SilentFlag,desired.Fans.Silent); Write(Vault.Trigger,desired.Trigger);
             Write(Vault.FanLatch,desired.Fans.Latch); Write(Vault.FanClamp,desired.Clamp);
+            Flush();
             var after=ReadPerformance(ec);
             if(!SamePerformance(after,desired)) throw new IOException("最终档位或风扇表不一致。");
             expected=Read(ec); PerformanceState=after; var result=new PerformanceReceipt(before,after);
@@ -128,6 +139,21 @@ public sealed partial class HardwareSession
             throw new IOException("档位操作已停止；可能部分生效。请保留强冷并重新读取诊断。"+error.Message,error);
         }
     });
+    private sealed record ClassicControlStep(ushort address,byte value,int ignore);
+    private void FlushClassicControls(byte project,List<ClassicControlStep> steps)
+    {
+        if(steps.Count==0)return;
+        Guard();
+        CoreMachine.Library.ExecuteFeature(13,new{kind="fan_controls",project,steps});
+        steps.Clear();
+    }
+
+    private void WriteClassicFanTables(byte project,(ushort Start,int[] Values)[] tables)
+    {
+        Guard();
+        CoreMachine.Library.ExecuteFeature(13,new{kind="fan_tables",project,values=tables.SelectMany(table=>table.Values).ToArray()});
+    }
+
     public PerformanceReceipt UndoPerformance() => Serialized(() =>
     {
         var last=lastPerformance ?? throw new InvalidOperationException("没有本次会话可撤销的性能更改。");

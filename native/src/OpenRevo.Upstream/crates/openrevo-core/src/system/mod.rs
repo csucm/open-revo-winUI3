@@ -2,6 +2,7 @@ pub mod actuator;
 pub mod boot_trace;
 pub mod color_calibration;
 pub mod config;
+pub mod config_io;
 pub mod cpu_monitor;
 pub mod device_switches;
 pub mod hardware_probe;
@@ -21,3 +22,4 @@ pub mod native_metrics;
 pub mod native_services;
 pub mod display_tuning;
 
+pub mod win_key_hook;

@@ -17,6 +17,7 @@
     "discrete_gpu": false,
     "water_cooling": false,
     "fan_custom_curve": false,
+    "fn_lock": true,
     "battery_charge_limit": false,
     "power_modes": ["office", "balance", "turbo"],
     "power_mode_watts": {
@@ -79,6 +80,24 @@
     "set_keyboard_backlight": {
       "channel": "wmi_mailbox",
       "input": [0, 251, 0, 18, "{val}"]
+    },
+    "get_keyboard_backlight": {
+      "channel": "wmi_mailbox",
+      "input": [0, 250, 0, 18, 0],
+      "parse": { "level": { "offset": 4, "type": "u8" } }
+    },
+    "get_fn_lock": {
+      "channel": "wmi_mailbox",
+      "input": [0, 250, 0, 11, 0],
+      "parse": { "state": { "offset": 4, "type": "u8" } }
+    },
+    "switch_fn_lock_on": {
+      "channel": "wmi_mailbox",
+      "input": [0, 251, 0, 11, 1]
+    },
+    "switch_fn_lock_off": {
+      "channel": "wmi_mailbox",
+      "input": [0, 251, 0, 11, 0]
     },
     "switch_touchpad_on": {
       "channel": "wmi_mailbox",

@@ -3,8 +3,6 @@
 namespace OpenRevo.Core.Hal;
 public static class Vault
 {
-    public const uint ReadIoctl = 2621482120;
-    internal const uint WriteIoctl = 2621482124;
     public const ushort ProjectId = 1856;
     public const ushort CpuFanHigh = 1124;
     public const ushort CpuFanLow = 1125;

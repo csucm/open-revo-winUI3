@@ -1,4 +1,4 @@
-using Microsoft.UI.Xaml;
+﻿using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenRevo.Core;
 
@@ -21,26 +21,45 @@ public sealed partial class MainWindow
         catch(Exception error){actions.Add("屏幕唤醒："+error.Message);}
     }
     private readonly Dictionary<string,Button> quickButtons=[];
-    private sealed record QuickState(bool? Camera,bool CameraAvailable,bool? Microphone,bool? WinLocked);
+    private sealed record QuickState(bool? Camera,bool CameraAvailable,bool? Microphone,bool? WinLocked)
+    {
+        internal CameraState? WindowsDevice { get; init; }
+        internal int WinGeneration { get; init; }
+    }
     private QuickState quickState=new(null,false,null,null);
     private Task<QuickState>? quickRead;
     private int quickGeneration,quickReadGeneration;
     private DateTimeOffset lastQuickRead;
     private bool quickBusy;
+    private object? cameraWindowsDiagnostics;
     private QuickState ReadQuickState()
     {
+        int winGeneration=winStateGeneration;
         bool? camera=null,mic=null,win=null;bool available=false;CameraState? pnp=null;
-        try {pnp=CameraControl.Read();available=pnp!=null;}catch{}
-        try {if(hardware.Active){var state=hardware.ProbeSwitches();win=state.WinKeyLocked;camera=state.CameraPowered?pnp?.Enabled:false;}}catch{}
+        try{win=upstream?.ReadWindowsWinKeyLocked();}catch{}
+        try
+        {
+            if(hardware.CoreDelegated)
+            {
+                var devices=CameraControl.ReadWindowsCandidates();available=devices.Count>0;
+                pnp=devices.Count==1?devices[0]:null;
+                cameraWindowsDiagnostics=new{source="present Windows Camera-class devices; firmware power unknown",candidateCount=devices.Count,states=devices.Select(d=>d.Enabled).ToArray(),selection=devices.Count==1?"single Windows device":"not selected"};
+            }
+            else{pnp=CameraControl.Read();available=pnp!=null;}
+        }
+        catch(Exception error){cameraWindowsDiagnostics=new{error=DiagnosticJournal.Scrub(error.Message),hresult=$"0x{error.HResult:X8}"};}
+        try {if(hardware.Active){if(hardware.CoreDelegated)camera=pnp?.Enabled;else camera=hardware.ProbeSwitches().CameraPowered?pnp?.Enabled:false;}}catch{}
         try {mic=upstream?.ReadMicrophone();}catch{}
-        try {if(camera==true && upstream?.IsCameraAccessBlocked()==true)camera=false;}catch{camera=null;}
-        return new(camera,available,mic,win);
+        try {if(!hardware.CoreDelegated && camera==true && upstream?.IsCameraAccessBlocked()==true)camera=false;}catch{camera=null;}
+        return new(camera,available,mic,win){WindowsDevice=hardware.CoreDelegated?pnp:null,WinGeneration=winGeneration};
     }
+    private void ApplyQuickRead(QuickState value)=>quickState=value with
+    {WinLocked=value.WinGeneration==winStateGeneration&&requestedWinLocked==null?value.WinLocked:quickState.WinLocked};
     private void SampleQuickActions()
     {
         if(quickRead is {IsCompleted:true})
         {
-            if(quickReadGeneration==quickGeneration&&!quickBusy)quickState=quickRead.IsCompletedSuccessfully?quickRead.Result:new(null,false,null,null);
+            if(quickReadGeneration==quickGeneration&&!quickBusy)ApplyQuickRead(quickRead.IsCompletedSuccessfully?quickRead.Result:new(null,false,null,null){WinGeneration=winStateGeneration});
             quickRead=null;UpdateQuickActions();
         }
         if(!quickBusy && requestedWinLocked==null && !hardwareBusy && !gpuChanging && quickRead==null && DateTimeOffset.Now-lastQuickRead>TimeSpan.FromSeconds(6))
@@ -53,7 +72,7 @@ public sealed partial class MainWindow
         {
             "camera"=>"开启或关闭笔记本摄像头；被 Windows 禁用时需先启用设备",
             "mic"=>"静音或恢复 Windows 默认麦克风",
-            "win"=>"锁定 Win 键，避免游戏时误触；再次点击解锁",
+            "win"=>"Windows 软件锁；退出程序后解除，隐藏到托盘时保持",
             "awake"=>"保持电脑和屏幕唤醒；退出程序后自动解除",
             _=>"关闭屏幕显示，电脑继续运行；移动鼠标或按键唤醒"
         });
@@ -78,7 +97,7 @@ public sealed partial class MainWindow
                 content.Children.Add(Ui.Icon(glyph,mini?17:20));content.Children.Add(Ui.Text(label,mini?10:12));button.Content=content;button.Tag=label;
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button,label);
             }
-            button.IsEnabled=key switch{"camera"=>hardware.Active&&quickState.CameraAvailable&&quickState.Camera.HasValue&&upstream!=null,"mic"=>quickState.Microphone.HasValue&&upstream!=null,"win"=>hardware.Active&&quickState.WinLocked.HasValue,_=>true};
+            button.IsEnabled=key switch{"camera"=>hardware.Active&&quickState.CameraAvailable&&quickState.Camera.HasValue&&upstream!=null,"mic"=>quickState.Microphone.HasValue&&upstream!=null,"win"=>upstream!=null&&quickState.WinLocked.HasValue,_=>true};
             if(!mini){UpdateApprovedQuickButton(button,key,key switch{"camera"=>quickState.Camera,"mic"=>quickState.Microphone,"win"=>quickState.WinLocked,"awake"=>sessionPower?.Enabled==true,_=>false},quickBusy);continue;}
             if(selected)button.Style=(Style)Application.Current.Resources["SelectedChoiceStyle"];else button.ClearValue(FrameworkElement.StyleProperty);
         }
@@ -96,7 +115,15 @@ public sealed partial class MainWindow
             switch(key)
             {
                 case "camera":
-                    quickState=await ToggleCameraThroughCore();
+                    if(hardware.CoreDelegated)
+                    {
+                        if(!hardware.Active||quickState.WindowsDevice is not {Enabled:bool before} expected)
+                            throw new IOException("当前 Windows 相机设备状态未知。");
+                        await Task.Run(()=>CameraControl.SetWindowsDeviceAsync(expected,!before));
+                        ApplyQuickRead(await Task.Run(ReadQuickState));
+                        break;
+                    }
+                    ApplyQuickRead(await ToggleCameraThroughCore());
                     if(quickState.Camera is bool camera)ConfirmShortcutOsd(6,camera?1u:0u);
                     break;
                 case "mic":
@@ -168,3 +195,5 @@ public sealed partial class MainWindow
         }
     }
 }
+
+

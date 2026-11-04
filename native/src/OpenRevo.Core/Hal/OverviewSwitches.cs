@@ -5,6 +5,33 @@ public sealed partial class HardwareSession
     {
         if(key is not(OverviewSwitch.Touchpad or OverviewSwitch.FnLock))throw new ArgumentOutOfRangeException(nameof(key));
         if(!Active)throw new InvalidOperationException("请先启用硬件接管。");
+        if(CoreDelegated)
+        {
+            if(key==OverviewSwitch.FnLock&&Admission.FnLock)
+            {
+                Guard();
+                audit(new{operation="core-fn-lock-intent",beforeEnabled,target});
+                try
+                {
+                    core.SetOverviewSwitch(key,beforeEnabled,target);
+                    var confirmed=core.ReadOverviewSwitches();
+                    if(confirmed.FnLock!=target)throw new IOException("Fn 锁固件状态未确认。");
+                    audit(new{operation="core-fn-lock-confirmed",target});
+                    return confirmed;
+                }
+                catch{faulted=true;throw;}
+            }
+            Guard();if(key!=OverviewSwitch.Touchpad||!SupportsTouchpad)throw new NotSupportedException("Core未声明此快捷控制接口。");
+            if(core.ReadOverviewSwitches().Touchpad!=beforeEnabled)throw new IOException("Windows触摸板状态已变化，请重读。");
+            audit(new{operation="core-touchpad-intent",beforeEnabled,target,hardwareReadback=false});
+            try
+            {
+                core.SetOverviewSwitch(key,beforeEnabled,target);var confirmed=core.ReadOverviewSwitches();
+                if(confirmed.Touchpad!=target)throw new IOException("Windows触摸板状态未确认，后续写入已停止。");
+                audit(new{operation="core-touchpad-system-confirmed",target,windowsReadback=true,hardwareReadback=false});return confirmed;
+            }
+            catch{faulted=true;throw;}
+        }
         Guard();using var ec=open();var before=Read(ec);
         if(!MatchesProject(before.Project))throw new IOException("设备不匹配。");
         ushort address=key==OverviewSwitch.Touchpad?Vault.BatteryMode:Vault.FnLock;

@@ -43,34 +43,75 @@ impl DeclarativeHardwareDriver {
         &self.manifest
     }
 
-    fn execute_buffer_action(&self, in_bytes: &[u8]) -> Result<Vec<u8>, HalError> {
-        // Find default wmi_mailbox channel
-        let channel = self
-            .manifest
-            .channels
-            .values()
-            .find_map(|c| match c {
-                ChannelDef::WmiMailbox {
-                    namespace,
-                    class_name,
-                    method_name,
-                    buffer_sizes,
-                } => Some((namespace, class_name, method_name, buffer_sizes)),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                HalError::DriverUnavailable("No WmiMailbox channel configured in manifest".to_string())
-            })?;
+    // The original desktop client stages SPL, sPPT and an optional temperature
+    // wall before entering the custom policy. Resolve bytes from the manifest.
+    pub fn set_cpu_profile(&self, pl1: u32, pl2: u32, temperature: Option<u32>) -> Result<(), HalError> {
+        let invalid = || HalError::InvalidParameter("CPU profile outside manifest limits".into());
+        let guardrails = self.manifest.guardrails.as_ref().ok_or_else(invalid)?;
+        let pl1_limits = guardrails.pl1_watts_limit.ok_or_else(invalid)?;
+        let pl2_limits = guardrails.pl2_watts_limit.ok_or_else(invalid)?;
+        if !(pl1_limits.min..=pl1_limits.max).contains(&pl1)
+            || !(pl2_limits.min..=pl2_limits.max).contains(&pl2)
+            || pl2 < pl1
+            || temperature.is_some_and(|n| !(70..=100).contains(&n)) {
+            return Err(invalid());
+        }
+        let mut requests = Vec::new();
+        for (key, value) in [("set_cpu_spl", Some(pl1)), ("set_cpu_sppt", Some(pl2)), ("set_cpu_temp_wall", temperature)] {
+            let Some(value) = value else { continue; };
+            let Some(ActionDef::BufferInvoke { input, channel, .. }) = self.manifest.actions.get(key) else {
+                return Err(HalError::UnsupportedModel(format!("No {key} action declared")));
+            };
+            let bytes: Option<Vec<u8>> = input.iter().map(|element| {
+                let number = if element.as_str() == Some("{val}") { Some(u64::from(value)) } else { element.as_u64() };
+                number.and_then(|number| u8::try_from(number).ok())
+            }).collect();
+            requests.push((channel.as_deref(), bytes.ok_or_else(invalid)?));
+        }
+        for (channel, bytes) in requests {
+            self.execute_channel_action(channel, &bytes)?;
+        }
+        self.set_performance_mode(HardwarePowerMode::Custom)
+    }
+
+    fn execute_channel_action(&self, name: Option<&str>, in_bytes: &[u8]) -> Result<Vec<u8>, HalError> {
+        let channel = match name {
+            Some(name) => self.manifest.channels.get(name),
+            None => {
+                let mut mailboxes = self.manifest.channels.values()
+                    .filter(|channel| matches!(channel, ChannelDef::WmiMailbox { .. }));
+                let first = mailboxes.next();
+                if mailboxes.next().is_some() {
+                    return Err(HalError::DriverUnavailable("Multiple mailboxes require an explicit action channel".into()));
+                }
+                first
+            }
+        };
+        let Some(ChannelDef::WmiMailbox { namespace, class_name, method_name, buffer_sizes }) = channel else {
+            return Err(HalError::DriverUnavailable("Action has no valid WMI mailbox channel".into()));
+        };
 
         invoke_wmi_mailbox(
-            channel.0,
-            channel.1,
-            channel.2,
+            namespace,
+            class_name,
+            method_name,
             in_bytes,
-            channel.3.in_size,
-            channel.3.out_size,
+            buffer_sizes.in_size,
+            buffer_sizes.out_size,
         )
         .map_err(|e| HalError::RegisterAccessFailed(e))
+    }
+
+    fn read_declared_byte(&self, action: &str, field: &str) -> Option<u8> {
+        let ActionDef::BufferInvoke { input, channel, parse, .. } = self.manifest.actions.get(action)? else {
+            return None;
+        };
+        let bytes: Option<Vec<u8>> = input.iter()
+            .map(|value| value.as_u64().and_then(|value| u8::try_from(value).ok())).collect();
+        let response = self.execute_channel_action(channel.as_deref(), &bytes?).ok()?;
+        let rule = parse.as_ref()?.get(field)?;
+        extract_value_from_buffer(&response, rule.offset, &rule.value_type)
+            .and_then(|value| u8::try_from(value).ok())
     }
 }
 
@@ -83,70 +124,39 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
             HardwarePowerMode::Custom => "turbo",
         };
 
-        if let Some(action) = self.manifest.actions.get("set_power_mode") {
-            let bytes_opt = match action {
-                ActionDef::ModeMap(map) => map.get(mode_key).cloned(),
-                ActionDef::BufferInvoke { input, .. } => Some(input.clone()),
-                ActionDef::RawBytes(bytes) => Some(bytes.clone()),
-            };
-
-            if let Some(val_bytes) = bytes_opt {
-                let u8_bytes: Vec<u8> = val_bytes
-                    .iter()
-                    .filter_map(|v| v.as_u64().map(|n| n as u8))
-                    .collect();
-
-                if !u8_bytes.is_empty() {
-                    for channel in self.manifest.channels.values() {
-                        match channel {
-                            ChannelDef::WmiIp3 => {
-                                if let Some(&raw_mode) = u8_bytes.first() {
-                                    if crate::driver::wmi_ip3::ip3_set_power_mode(raw_mode) {
-                                        self.last_power_mode.store(mode as u8, Ordering::SeqCst);
-                                        crate::log_info!(
-                                            "DECLARATIVE_HAL",
-                                            "Applied performance mode {:?} via WmiIp3 channel (raw_mode={})",
-                                            mode,
-                                            raw_mode
-                                        );
-                                        return Ok(());
-                                    } else {
-                                        return Err(HalError::RegisterAccessFailed("WmiIp3 SetPowerMode failed".into()));
-                                    }
-                                }
-                            }
-                            ChannelDef::WmiMailbox { .. } => {
-                                self.execute_buffer_action(&u8_bytes)?;
-                                self.last_power_mode.store(mode as u8, Ordering::SeqCst);
-                                crate::log_info!(
-                                    "DECLARATIVE_HAL",
-                                    "Applied performance mode {:?} via WmiMailbox channel ({:?})",
-                                    mode,
-                                    u8_bytes
-                                );
-                                return Ok(());
-                            }
-                            ChannelDef::AcpiIoctl { .. } => {
-                                let real = crate::hal::driver_impl::MechrevoHALImpl::new();
-                                real.set_performance_mode(mode)?;
-                                self.last_power_mode.store(mode as u8, Ordering::SeqCst);
-                                crate::log_info!(
-                                    "DECLARATIVE_HAL",
-                                    "Applied performance mode {:?} via Native Tongfang ACPI IOCTL channel",
-                                    mode
-                                );
-                                return Ok(());
-                            }
-                        }
-                    }
+        let action = self.manifest.actions.get("set_power_mode")
+            .ok_or_else(|| HalError::UnsupportedModel("No performance action declared".into()))?;
+        let (input, channel_name) = match action {
+            ActionDef::ModeMap(map) => (map.get(mode_key), None),
+            ActionDef::BufferInvoke { input, channel, .. } => (Some(input), channel.as_deref()),
+            ActionDef::RawBytes(bytes) => (Some(bytes), None),
+        };
+        let input = input.ok_or_else(|| HalError::UnsupportedModel("Performance mode not declared".into()))?;
+        let bytes: Option<Vec<u8>> = input.iter()
+            .map(|value| value.as_u64().and_then(|n| u8::try_from(n).ok()))
+            .collect();
+        let bytes = bytes.filter(|bytes| !bytes.is_empty())
+            .ok_or_else(|| HalError::InvalidParameter("Invalid performance action bytes".into()))?;
+        let channel = match channel_name {
+            Some(name) => self.manifest.channels.get(name),
+            None if self.manifest.channels.len() == 1 => self.manifest.channels.values().next(),
+            None => None,
+        }.ok_or_else(|| HalError::DriverUnavailable("Performance action channel is missing or ambiguous".into()))?;
+        match channel {
+            ChannelDef::WmiIp3 => {
+                if !crate::driver::wmi_ip3::ip3_set_power_mode(bytes[0]) {
+                    return Err(HalError::RegisterAccessFailed("WmiIp3 SetPowerMode failed".into()));
                 }
             }
+            ChannelDef::WmiMailbox { .. } => {
+                self.execute_channel_action(channel_name, &bytes)?;
+            }
+            ChannelDef::AcpiIoctl { .. } => {
+                crate::hal::driver_impl::MechrevoHALImpl::new().set_performance_mode(mode)?;
+            }
         }
-
-        Err(HalError::UnsupportedModel(format!(
-            "set_power_mode for {:?} not defined in driver manifest",
-            mode
-        )))
+        self.last_power_mode.store(mode as u8, Ordering::SeqCst);
+        Ok(())
     }
 
     fn set_battery_health(&self, mode: BatteryHealthMode) -> Result<(), HalError> {
@@ -158,7 +168,6 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
 
         // Native Tongfang ACPI channel support: bridge to MechrevoHALImpl
         if self.manifest.channels.values().any(|c| matches!(c, ChannelDef::AcpiIoctl { .. }))
-            || crate::driver::wmi_ec::is_acpi_driver_available()
         {
             let real = crate::hal::driver_impl::MechrevoHALImpl::new();
             real.set_battery_health(mode)?;
@@ -173,7 +182,7 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
         };
 
         // Declarative battery protection command if configured in actions
-        if let Some(ActionDef::BufferInvoke { input, .. }) =
+        if let Some(ActionDef::BufferInvoke { input, channel, .. }) =
             self.manifest.actions.get("set_battery_limit")
         {
             let u8_bytes: Vec<u8> = input
@@ -187,11 +196,11 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
                 })
                 .collect();
 
-            let _ = self.execute_buffer_action(&u8_bytes)?;
+            let _ = self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
             return Ok(());
         }
 
-        Ok(())
+        Err(HalError::UnsupportedModel("No battery charge limit action declared".into()))
     }
 
     fn set_fan_boost(&self, active: bool) -> Result<(), HalError> {
@@ -226,12 +235,12 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
         } else {
             "set_fan_boost_off"
         };
-        if let Some(ActionDef::BufferInvoke { input, .. }) = self.manifest.actions.get(action_name) {
+        if let Some(ActionDef::BufferInvoke { input, channel, .. }) = self.manifest.actions.get(action_name) {
             let u8_bytes: Vec<u8> = input
                 .iter()
                 .filter_map(|v| v.as_u64().map(|n| n as u8))
                 .collect();
-            let _ = self.execute_buffer_action(&u8_bytes);
+            self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
             return Ok(());
         }
 
@@ -252,12 +261,12 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
             DeviceSwitchType::PowerOffUsbCharge => "usb_charge",
         };
         let action_key = format!("switch_{}_{}", switch_name, if enable { "on" } else { "off" });
-        if let Some(ActionDef::BufferInvoke { input, .. }) = self.manifest.actions.get(&action_key) {
+        if let Some(ActionDef::BufferInvoke { input, channel, .. }) = self.manifest.actions.get(&action_key) {
             let u8_bytes: Vec<u8> = input
                 .iter()
                 .filter_map(|v| v.as_u64().map(|n| n as u8))
                 .collect();
-            let _ = self.execute_buffer_action(&u8_bytes)?;
+            let _ = self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
             return Ok(());
         }
         // Fallback to Win32 software switch
@@ -267,25 +276,27 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
     }
 
     fn read_fan_rpm(&self) -> Result<(u16, u16), HalError> {
-        if let Some(ActionDef::BufferInvoke { input, parse, .. }) =
+        if let Some(ActionDef::BufferInvoke { input, channel, parse, .. }) =
             self.manifest.actions.get("read_fan_rpm")
         {
-            let u8_bytes: Vec<u8> = input
-                .iter()
-                .filter_map(|v| v.as_u64().map(|n| n as u8))
+            let bytes: Option<Vec<u8>> = input.iter()
+                .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()))
                 .collect();
-            let out_buf = self.execute_buffer_action(&u8_bytes)?;
+            let u8_bytes = bytes.ok_or_else(|| HalError::InvalidParameter("Invalid fan read request".into()))?;
+            let out_buf = self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
 
             if let Some(parse_rules) = parse {
                 let cpu_rpm = parse_rules
                     .get("cpu_rpm")
                     .and_then(|rule| extract_value_from_buffer(&out_buf, rule.offset, &rule.value_type))
-                    .unwrap_or(0) as u16;
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| HalError::RegisterAccessFailed("Fan RPM missing from response".into()))?;
 
                 let gpu_rpm = parse_rules
                     .get("gpu_rpm")
                     .and_then(|rule| extract_value_from_buffer(&out_buf, rule.offset, &rule.value_type))
-                    .unwrap_or(0) as u16;
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| HalError::RegisterAccessFailed("Fan RPM missing from response".into()))?;
 
                 return Ok((cpu_rpm, gpu_rpm));
             }
@@ -314,7 +325,7 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
                     };
                 }
                 ChannelDef::WmiMailbox { .. } => {
-                    if let Some(ActionDef::BufferInvoke { input, .. }) =
+                    if let Some(ActionDef::BufferInvoke { input, channel, .. }) =
                         self.manifest.actions.get("set_keyboard_backlight")
                     {
                         let u8_bytes: Vec<u8> = input
@@ -327,7 +338,7 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
                                 }
                             })
                             .collect();
-                        let _ = self.execute_buffer_action(&u8_bytes)?;
+                        let _ = self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
                         crate::log_info!("DECLARATIVE_HAL", "Set monochrome backlight to level {} via manifest action", level);
                         return Ok(());
                     }
@@ -342,6 +353,9 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
     }
 
     fn get_monochrome_backlight(&self) -> Option<u8> {
+        if self.manifest.actions.contains_key("get_keyboard_backlight") {
+            return self.read_live_monochrome_backlight();
+        }
         for channel in self.manifest.channels.values() {
             if matches!(channel, ChannelDef::WmiIp3) {
                 return crate::driver::wmi_ip3::ip3_get_keyboard_backlight_level();
@@ -358,6 +372,26 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
     fn is_hardware_supported(&self) -> bool {
         true
     }
+
+    fn read_live_fn_lock(&self) -> Option<bool> {
+        match self.read_declared_byte("get_fn_lock", "state")? {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        }
+    }
+
+    fn read_live_monochrome_backlight(&self) -> Option<u8> {
+        if self.manifest.actions.contains_key("get_keyboard_backlight") {
+            let level = self.read_declared_byte("get_keyboard_backlight", "level")?;
+            let keyboard = self.manifest.capabilities.rgb_keyboard.as_ref()?;
+            return (level == 0 || keyboard.steps.contains(&level)).then_some(level);
+        }
+        if self.manifest.channels.values().any(|channel| matches!(channel, ChannelDef::WmiIp3)) {
+            return crate::driver::wmi_ip3::ip3_get_keyboard_backlight_level();
+        }
+        None
+    }
 }
 
 impl HardwareDriver for DeclarativeHardwareDriver {
@@ -373,7 +407,7 @@ impl HardwareDriver for DeclarativeHardwareDriver {
         true
     }
 
-    fn get_performance_mode(&self) -> Result<HardwarePowerMode, HalError> {
+    fn read_live_performance_mode(&self) -> Option<HardwarePowerMode> {
         for channel in self.manifest.channels.values() {
             if matches!(channel, ChannelDef::WmiIp3) {
                 if let Some(raw) = crate::driver::wmi_ip3::ip3_get_power_mode() {
@@ -381,21 +415,21 @@ impl HardwareDriver for DeclarativeHardwareDriver {
                         2 => HardwarePowerMode::Office,
                         0 => HardwarePowerMode::Balance,
                         1 => HardwarePowerMode::Turbo,
-                        _ => HardwarePowerMode::Balance,
+                        _ => return None,
                     };
                     self.last_power_mode.store(hw_mode as u8, Ordering::SeqCst);
-                    return Ok(hw_mode);
+                    return Some(hw_mode);
                 }
             }
         }
 
         // Generic get_power_mode buffer action (e.g. Baolongda MIFS, Xingyao)
-        if let Some(ActionDef::BufferInvoke { input, parse, mapping, .. }) = self.manifest.actions.get("get_power_mode") {
+        if let Some(ActionDef::BufferInvoke { input, channel, parse, mapping, .. }) = self.manifest.actions.get("get_power_mode") {
             let u8_bytes: Vec<u8> = input
                 .iter()
                 .filter_map(|v| v.as_u64().map(|n| n as u8))
                 .collect();
-            if let Ok(out_buf) = self.execute_buffer_action(&u8_bytes) {
+            if let Ok(out_buf) = self.execute_channel_action(channel.as_deref(), &u8_bytes) {
                 if let Some(parse_rules) = parse {
                     if let Some(rule) = parse_rules.get("mode_code") {
                         if let Some(raw_val) = extract_value_from_buffer(&out_buf, rule.offset, &rule.value_type) {
@@ -405,24 +439,29 @@ impl HardwareDriver for DeclarativeHardwareDriver {
                                     Some("office") | Some("silence") => HardwarePowerMode::Office,
                                     Some("balance") => HardwarePowerMode::Balance,
                                     Some("turbo") | Some("rage") => HardwarePowerMode::Turbo,
-                                    _ => HardwarePowerMode::Balance,
+                                    _ => return None,
                                 }
                             } else {
                                 match raw_val {
                                     1 => HardwarePowerMode::Office,
                                     2 => HardwarePowerMode::Balance,
                                     3 => HardwarePowerMode::Turbo,
-                                    _ => HardwarePowerMode::Balance,
+                                    _ => return None,
                                 }
                             };
                             self.last_power_mode.store(hw_mode as u8, Ordering::SeqCst);
-                            return Ok(hw_mode);
+                            return Some(hw_mode);
                         }
                     }
                 }
             }
         }
 
+        None
+    }
+
+    fn get_performance_mode(&self) -> Result<HardwarePowerMode, HalError> {
+        if let Some(mode) = self.read_live_performance_mode() { return Ok(mode); }
         let val = self.last_power_mode.load(Ordering::SeqCst);
         match val {
             1 => Ok(HardwarePowerMode::Office),
@@ -432,18 +471,15 @@ impl HardwareDriver for DeclarativeHardwareDriver {
         }
     }
 
-    fn read_cpu_temp(&self) -> Result<u8, HalError> {
-        if let Some(ActionDef::BufferInvoke { input, parse, .. }) = self.manifest.actions.get("read_cpu_temp") {
-            let u8_bytes: Vec<u8> = input
-                .iter()
-                .filter_map(|v| v.as_u64().map(|n| n as u8))
-                .collect();
-            if let Ok(out_buf) = self.execute_buffer_action(&u8_bytes) {
+    fn read_live_cpu_temp(&self) -> Option<u8> {
+        if let Some(ActionDef::BufferInvoke { input, channel, parse, .. }) = self.manifest.actions.get("read_cpu_temp") {
+            let u8_bytes: Option<Vec<u8>> = input.iter().map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok())).collect(); let u8_bytes = u8_bytes?;
+            if let Ok(out_buf) = self.execute_channel_action(channel.as_deref(), &u8_bytes) {
                 if let Some(parse_rules) = parse {
                     if let Some(rule) = parse_rules.get("cpu_temp") {
                         if let Some(val) = extract_value_from_buffer(&out_buf, rule.offset, &rule.value_type) {
                             if val > 0 && val < 125 {
-                                return Ok(val as u8);
+                                return Some(val as u8);
                             }
                         }
                     }
@@ -451,6 +487,11 @@ impl HardwareDriver for DeclarativeHardwareDriver {
             }
         }
 
+        None
+    }
+
+    fn read_cpu_temp(&self) -> Result<u8, HalError> {
+        if let Some(temp) = self.read_live_cpu_temp() { return Ok(temp); }
         let temp = crate::system::cpu_monitor::get_cpu_monitor().get_temp();
         if temp > 0 && temp < 125 {
             Ok(temp as u8)
@@ -460,12 +501,12 @@ impl HardwareDriver for DeclarativeHardwareDriver {
     }
 
     fn get_gpu_mux(&self) -> Result<String, HalError> {
-        if let Some(ActionDef::BufferInvoke { input, parse, mapping, .. }) = self.manifest.actions.get("get_gpu_mux") {
+        if let Some(ActionDef::BufferInvoke { input, channel, parse, mapping, .. }) = self.manifest.actions.get("get_gpu_mux") {
             let u8_bytes: Vec<u8> = input
                 .iter()
                 .filter_map(|v| v.as_u64().map(|n| n as u8))
                 .collect();
-            let out_buf = self.execute_buffer_action(&u8_bytes)?;
+            let out_buf = self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
             if let Some(parse_rules) = parse {
                 if let Some(rule) = parse_rules.get("mode_code") {
                     if let Some(raw_val) = extract_value_from_buffer(&out_buf, rule.offset, &rule.value_type) {
@@ -489,12 +530,12 @@ impl HardwareDriver for DeclarativeHardwareDriver {
 
     fn set_gpu_mux(&self, discrete_only: bool) -> Result<(), HalError> {
         let action_name = if discrete_only { "set_gpu_mux_discrete" } else { "set_gpu_mux_hybrid" };
-        if let Some(ActionDef::BufferInvoke { input, .. }) = self.manifest.actions.get(action_name) {
+        if let Some(ActionDef::BufferInvoke { input, channel, .. }) = self.manifest.actions.get(action_name) {
             let u8_bytes: Vec<u8> = input
                 .iter()
                 .filter_map(|v| v.as_u64().map(|n| n as u8))
                 .collect();
-            let _ = self.execute_buffer_action(&u8_bytes)?;
+            let _ = self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
             crate::log_info!("DECLARATIVE_HAL", "Executed GPU MUX switch (discrete_only={}) via manifest", discrete_only);
             return Ok(());
         }
@@ -502,7 +543,7 @@ impl HardwareDriver for DeclarativeHardwareDriver {
     }
 
     fn set_keyboard_rgb(&self, r: u8, g: u8, b: u8) -> Result<(), HalError> {
-        if let Some(ActionDef::BufferInvoke { input, .. }) = self.manifest.actions.get("set_keyboard_rgb") {
+        if let Some(ActionDef::BufferInvoke { input, channel, .. }) = self.manifest.actions.get("set_keyboard_rgb") {
             let u8_bytes: Vec<u8> = input
                 .iter()
                 .map(|v| {
@@ -514,7 +555,7 @@ impl HardwareDriver for DeclarativeHardwareDriver {
                     }
                 })
                 .collect();
-            let _ = self.execute_buffer_action(&u8_bytes)?;
+            let _ = self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
             crate::log_info!("DECLARATIVE_HAL", "Applied keyboard RGB ({}, {}, {}) via manifest", r, g, b);
             return Ok(());
         }
@@ -532,9 +573,9 @@ impl HardwareDriver for DeclarativeHardwareDriver {
                 if is_bld {
                     crate::driver::bld_driver_mgr::stop_bld_rainbow();
                 }
-                if let Some(ActionDef::BufferInvoke { input, .. }) = self.manifest.actions.get("set_keyboard_mode_off") {
+                if let Some(ActionDef::BufferInvoke { input, channel, .. }) = self.manifest.actions.get("set_keyboard_mode_off") {
                     let u8_bytes: Vec<u8> = input.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect();
-                    let _ = self.execute_buffer_action(&u8_bytes)?;
+                    let _ = self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
                 }
                 let _ = self.set_keyboard_rgb(0, 0, 0);
                 Ok(())
@@ -546,9 +587,9 @@ impl HardwareDriver for DeclarativeHardwareDriver {
                     crate::log_info!("DECLARATIVE_HAL", "Activated Baolongda 10 FPS Hue Cycle Rainbow Gradient");
                     return Ok(());
                 }
-                if let Some(ActionDef::BufferInvoke { input, .. }) = self.manifest.actions.get("set_keyboard_mode_cyclic") {
+                if let Some(ActionDef::BufferInvoke { input, channel, .. }) = self.manifest.actions.get("set_keyboard_mode_cyclic") {
                     let u8_bytes: Vec<u8> = input.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect();
-                    let _ = self.execute_buffer_action(&u8_bytes)?;
+                    let _ = self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
                     crate::log_info!("DECLARATIVE_HAL", "Activated Rainbow AutoCyclic keyboard mode via manifest action");
                     return Ok(());
                 }
@@ -560,12 +601,20 @@ impl HardwareDriver for DeclarativeHardwareDriver {
                 if is_bld {
                     crate::driver::bld_driver_mgr::stop_bld_rainbow();
                 }
-                if let Some(ActionDef::BufferInvoke { input, .. }) = self.manifest.actions.get("set_keyboard_mode_fixed") {
+                if let Some(ActionDef::BufferInvoke { input, channel, .. }) = self.manifest.actions.get("set_keyboard_mode_fixed") {
                     let u8_bytes: Vec<u8> = input.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect();
-                    let _ = self.execute_buffer_action(&u8_bytes)?;
+                    let _ = self.execute_channel_action(channel.as_deref(), &u8_bytes)?;
                 }
                 self.set_keyboard_rgb(r, g, b)
             }
         }
     }
 }
+
+
+
+
+
+
+
+

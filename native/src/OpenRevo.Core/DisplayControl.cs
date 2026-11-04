@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 
 namespace OpenRevo.Core;
@@ -28,29 +29,41 @@ public static class DisplayControl
     private static DisplayDevice NewDevice() => new() { Size = Marshal.SizeOf<DisplayDevice>(), Name = "", Description = "", Id = "", Key = "" };
     private static byte[] Mode(string device, int index)
     {
-        var data = new byte[220]; BitConverter.GetBytes((ushort)data.Length).CopyTo(data, 68);
+        var data = new byte[220];
+        if (!TryReadMode(device, index, data)) throw new IOException("无法读取内置显示模式。");
+        return data;
+    }
+    private static void InitializeModeBuffer(byte[] data)
+    {
+        Array.Clear(data);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(68), (ushort)data.Length);
+    }
+    private static bool TryReadMode(string device, int index, byte[] data)
+    {
         // Same extended enumeration as upstream; includes supported rotated
         // orientations, without EDS_RAWMODE (which ignores panel capability).
-        if (!EnumDisplaySettingsExW(device,index,data,4) && !EnumDisplaySettingsW(device, index, data)) throw new IOException("无法读取内置显示模式。");
-        return data;
+        InitializeModeBuffer(data);
+        if (EnumDisplaySettingsExW(device, index, data, 4)) return true;
+        InitializeModeBuffer(data);
+        return EnumDisplaySettingsW(device, index, data);
     }
     public static DisplayState Read()
     {
         var selected=DisplayTopology.Internal();string device=selected.DeviceName;
-        var current = Mode(device, -1); int Get(byte[] bytes, int offset) => BitConverter.ToInt32(bytes, offset);
-        int width = Get(current, 172), height = Get(current, 176), bits = Get(current, 168);
-        DiagnosticLog.Record("display.mode",new{selected,width,height,bits,hertz=Get(current,184)});
-        if(width<=0||height<=0||Get(current,184)<=1)throw new IOException("Windows未提供有效的当前内置屏显示模式。");
+        var mode = Mode(device, -1);
+        int Get(int offset) => BitConverter.ToInt32(mode, offset);
+        int width = Get(172), height = Get(176), bits = Get(168), hertz = Get(184);
+        DiagnosticLog.Record("display.mode",new{selected,width,height,bits,hertz});
+        if(width<=0||height<=0||hertz<=1)throw new IOException("Windows未提供有效的当前内置屏显示模式。");
         var rates = new SortedSet<int>();
-        for (int i = 0; i < 1024; i++)
+        for (int i = 0; i < 1024 && TryReadMode(device, i, mode); i++)
         {
-            byte[] mode;
-            try { mode = Mode(device, i); } catch (IOException) { break; }
-            bool resolution=(Get(mode,172)==width&&Get(mode,176)==height)||(Get(mode,172)==height&&Get(mode,176)==width);
-            if (resolution && Get(mode, 168) == bits && Get(mode, 184) > 1) rates.Add(Get(mode, 184));
+            bool resolution=(Get(172)==width&&Get(176)==height)||(Get(172)==height&&Get(176)==width);
+            int rate = Get(184);
+            if (resolution && Get(168) == bits && rate > 1) rates.Add(rate);
         }
-        if(rates.Count==0&&Get(current,184)>1)rates.Add(Get(current,184));
-        return new(width, height, Get(current, 184), rates.ToArray(), device,selected.Panel);
+        if(rates.Count==0)rates.Add(hertz);
+        return new(width, height, hertz, rates.ToArray(), device,selected.Panel);
     }
     public static void SetRefresh(int expected, int target)
     {

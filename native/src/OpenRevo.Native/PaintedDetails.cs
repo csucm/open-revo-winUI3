@@ -19,6 +19,7 @@ public sealed partial class MainWindow
     private void RenderPaintedDetails(string route)
     {
         if(route=="devices"){RenderPaintedLighting();return;}
+        if(route=="tuning"&&hardware.DeclaredCpuTuning is {} limits){page.Children.Add(PaintDeclaredCpuTuning(limits));return;}
         if(route=="tuning"&&tuningBaseline==null&&!tuningLoading&&!uiReviewMode)_=PaintReadTuning();
         if(route=="color"&&colorDraft==null&&serviceColor.ValueKind==JsonValueKind.Object)colorDraft=JsonNode.Parse(serviceColor.GetProperty("active_preset").GetRawText())!.AsObject();
         if(route=="updates"){RenderPaintedUpdates();return;}
@@ -194,15 +195,33 @@ public sealed partial class MainWindow
         if(id.StartsWith("lightingzone"))await PaintSetZone(id=="lightingzone-1-1"?"speed":"brightness",JsonValue.Create((int)value)!);
     }
     private void PaintDraftChanged(){RememberPresetDraft();tuningStatus="草稿已修改，尚未应用。";}
+    private bool PaintIntegratedOnly => !uiReviewMode && CoreMachine.Current.IntegratedOnly;
+
+    private FrameworkElement PaintGpuAvailability(FrameworkElement modes)
+    {
+        var integrated=Paint.Inline(8,Paint.Icon("gpu-integrated",24),
+            Paint.Stack(3,PT(() => IntegratedGpuModel ?? "集成显卡"),Paint.Text("此机型不支持三模切换",12,muted:true)));
+        void Update()
+        {
+            bool integratedOnly=PaintIntegratedOnly;
+            modes.Visibility=integratedOnly?Visibility.Collapsed:Visibility.Visible;
+            integrated.Visibility=integratedOnly?Visibility.Visible:Visibility.Collapsed;
+        }
+        Update();
+        paintBindings.Add(Update);
+        return Paint.Stack(0,modes,integrated);
+    }
+
     private FrameworkElement PaintGpuDetails()
     {
         var grid=new DesktopTiles{PreferredColumns=3,MinimumItemWidth=0,SingleColumnBelow=460,ColumnSpacing=10,RowSpacing=10};foreach(var definition in originalGpuModes.OrderBy(m=>m.Mode)){int mode=definition.Mode;var b=PB(definition.Title,()=>RunGpuRequest(mode),true);var icon=Paint.Icon(mode==1?"gpu-integrated":mode==2?"gpu-hybrid":"gpu-discrete");icon.HorizontalAlignment=HorizontalAlignment.Center;var name=Paint.Text(definition.Title);name.TextAlignment=TextAlignment.Center;var desc=Paint.Text(definition.Description,12,muted:true);desc.TextAlignment=TextAlignment.Center;b.Content=Paint.Stack(8,icon,name,desc);b.Padding=new(16);b.HorizontalAlignment=HorizontalAlignment.Stretch;b.StretchContent();paintBindings.Add(()=>{b.Selected=gpuState?.Mode==mode;b.IsEnabled=hardware.Active&&gpuReadFresh&&!gpuChanging&&gpuState?.Supports(mode)==true;});grid.Children.Add(b);}
-        return Paint.Stack(14,grid,Paint.Between(PT(()=>"当前运行："+OriginalGpuName(GpuRuntimeMode)+(GpuRestartPending?" · 目标："+OriginalGpuName(gpuState?.Mode??0)+" · 待重启":""),12,muted:true),PB("刷新状态",()=>RunGpuRequest(0),true)));
+        return PaintGpuAvailability(Paint.Stack(14,grid,Paint.Between(PT(()=>UsesDeclaredGpuMux?"Core 读取模式："+OriginalGpuName(gpuState?.Mode??0):"当前运行："+OriginalGpuName(GpuRuntimeMode)+(GpuRestartPending?" · 目标："+OriginalGpuName(gpuState?.Mode??0)+" · 待重启":""),12,muted:true),PB("刷新状态",()=>RunGpuRequest(0),true))));
     }
     private FrameworkElement PaintBatteryHealth()
     {
-        var choices=Paint.Stack(8);foreach(var(name,desc,limit)in new[]{("长效模式","经常使用电池",100),("平衡模式","兼顾便携与桌面",80),("工作站模式","长期连接适配器",60)}){var b=PB(name,()=>RunHardware(()=>hardware.SetBatteryPreset(limit),"充电上限已回读确认。"),true);b.Content=Paint.Between(Paint.Stack(4,Paint.Text(name),Paint.Text(desc,12,muted:true)),Paint.Text(limit+"%"));b.Padding=new(12);b.StretchContent();paintBindings.Add(()=>{b.Selected=hardware.State?.Upper==limit;b.IsEnabled=hardware.Active&&hardware.SupportsBattery&&!hardwareBusy;});choices.Children.Add(b);}
-        var battery=PaintBatteryPicture(220);battery.Width=double.NaN;battery.MaxWidth=220;var copy=Paint.Stack(6,Paint.Text("剩余电量",12,muted:true),Paint.Inline(3,PT(()=>latest?.BatteryPercent?.ToString()??"—",24),Paint.Text("%")),PT(()=>latest?.OnAc==true?"已连接电源":latest?.OnAc==false?"正在使用电池":"供电状态未知",12,muted:true),PT(()=>hardware.State?.Upper is byte n?"充电上限 "+n+"%":"充电上限 —",12,muted:true));var status=new Grid{ColumnSpacing=24,Padding=new(16),VerticalAlignment=VerticalAlignment.Center};status.ColumnDefinitions.Add(new(){Width=new(1,GridUnitType.Star),MaxWidth=220});status.ColumnDefinitions.Add(new(){Width=GridLength.Auto,MinWidth=120});status.Children.Add(battery);Grid.SetColumn(copy,1);status.Children.Add(copy);return new ApprovedBatteryLayout(choices,status);
+        var choices=Paint.Stack(8);foreach(var(name,desc,limit)in new[]{("长效模式","经常使用电池",100),("平衡模式","兼顾便携与桌面",80),("工作站模式","长期连接适配器",60)}){var b=PB(name,()=>RunHardware(()=>hardware.ApplyBatteryCommand(limit),hardware.CoreDelegated?"Core 已发送充电上限命令。":"充电上限已回读确认。"),true);b.Content=Paint.Between(Paint.Stack(4,Paint.Text(name),Paint.Text(desc,12,muted:true)),Paint.Text(limit+"%"));b.Padding=new(12);b.StretchContent();paintBindings.Add(()=>{b.Selected=hardware.State?.Upper==limit;b.IsEnabled=hardware.Active&&hardware.SupportsBattery&&!hardwareBusy;});choices.Children.Add(b);}
+        BindCapability(choices,()=>hardware.SupportsBattery);
+        var battery=PaintBatteryPicture(220);battery.Width=double.NaN;battery.MaxWidth=220;var copy=Paint.Stack(6,Paint.Text("剩余电量",12,muted:true),Paint.Inline(3,PT(()=>latest?.BatteryPercent?.ToString()??"—",24),Paint.Text("%")),PT(()=>latest?.OnAc==true?"已连接电源":latest?.OnAc==false?"正在使用电池":"供电状态未知",12,muted:true),PT(()=>!ShowDeclaredControl(hardware.SupportsBattery)?"":hardware.State?.Upper is byte n?"充电上限 "+n+"%":"充电上限 —",12,muted:true));var status=new Grid{ColumnSpacing=24,Padding=new(16),VerticalAlignment=VerticalAlignment.Center};status.ColumnDefinitions.Add(new(){Width=new(1,GridUnitType.Star),MaxWidth=220});status.ColumnDefinitions.Add(new(){Width=GridLength.Auto,MinWidth=120});status.Children.Add(battery);Grid.SetColumn(copy,1);status.Children.Add(copy);return new ApprovedBatteryLayout(choices,status);
     }
     private double PaintMiniHeight(double width)
     {
@@ -211,3 +230,5 @@ public sealed partial class MainWindow
         return Math.Ceiling(page.DesiredSize.Height+32+8);
     }
 }
+
+

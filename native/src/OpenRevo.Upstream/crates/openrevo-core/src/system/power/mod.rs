@@ -53,29 +53,41 @@ pub const GUID_TURBO_PERF: GUID = GUID {
     data4: [0x87, 0x37, 0x46, 0x34, 0x5c, 0x09, 0xc2, 0x38],
 };
 
-#[link(name = "kernel32")]
-extern "system" {
-    fn LoadLibraryA(lp_lib_filename: *const u8) -> *mut std::ffi::c_void;
-    fn GetProcAddress(h_module: *mut std::ffi::c_void, lp_proc_name: *const u8) -> *mut std::ffi::c_void;
+use windows::core::s;
+use windows::Win32::Foundation::{FreeLibrary, HANDLE, HMODULE};
+use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExA, LOAD_LIBRARY_SEARCH_SYSTEM32};
+
+struct PowerLibrary(Option<HMODULE>);
+impl PowerLibrary {
+    fn release(&mut self)->Result<(),String> {
+        if let Some(handle)=self.0.take() {
+            unsafe{FreeLibrary(handle)}.map_err(|e|format!("Cannot release the Windows power library: {e}"))?;
+        }
+        Ok(())
+    }
+}
+impl Drop for PowerLibrary {
+    fn drop(&mut self){let _=self.release();}
+}
+fn with_power_library<T>(operation:impl FnOnce(HMODULE)->Result<T,String>)->Result<T,String> {
+    let handle=unsafe{LoadLibraryExA(s!("powrprof.dll"),HANDLE::default(),LOAD_LIBRARY_SEARCH_SYSTEM32)}
+        .map_err(|e|format!("Cannot load the Windows power library: {e}"))?;
+    let mut library=PowerLibrary(Some(handle));
+    let result=operation(handle);
+    let released=library.release();
+    result.and_then(|value|released.map(|_|value))
 }
 
 type FnPowerSetActiveOverlayScheme = unsafe extern "system" fn(*const GUID) -> u32;
 
-fn set_active_overlay_scheme(guid_ptr: *const GUID) -> u32 {
-    unsafe {
-        let dll_name = b"powrprof.dll\0";
-        let h_mod = LoadLibraryA(dll_name.as_ptr());
-        if h_mod.is_null() {
-            return 1;
-        }
-        let fn_name = b"PowerSetActiveOverlayScheme\0";
-        let p_func = GetProcAddress(h_mod, fn_name.as_ptr());
-        if p_func.is_null() {
-            return 2;
-        }
-        let func: FnPowerSetActiveOverlayScheme = std::mem::transmute(p_func);
-        func(guid_ptr)
-    }
+fn set_active_overlay_scheme(guid_ptr: *const GUID) -> Result<(),String> {
+    with_power_library(|library|unsafe{
+        let entry=GetProcAddress(library,s!("PowerSetActiveOverlayScheme"))
+            .ok_or("Windows does not expose PowerSetActiveOverlayScheme")?;
+        let apply:FnPowerSetActiveOverlayScheme=std::mem::transmute(entry);
+        let status=apply(guid_ptr);
+        if status==0{Ok(())}else{Err(format!("PowerSetActiveOverlayScheme failed with code {status}"))}
+    })
 }
 
 #[repr(C)]
@@ -100,28 +112,20 @@ type FnCallNtPowerInformation = unsafe extern "system" fn(
 /// Query live CPU frequency and limits across cores (zero overhead, in-memory kernel query).
 /// Returns (current_mhz, max_mhz, mhz_limit) for core 0.
 pub fn get_cpu_frequency_info() -> Option<(u32, u32, u32)> {
-    unsafe {
-        let dll_name = b"powrprof.dll\0";
-        let h_mod = LoadLibraryA(dll_name.as_ptr());
-        if h_mod.is_null() {
-            return None;
-        }
-        let fn_name = b"CallNtPowerInformation\0";
-        let p_func = GetProcAddress(h_mod, fn_name.as_ptr());
-        if p_func.is_null() {
-            return None;
-        }
-        let func: FnCallNtPowerInformation = std::mem::transmute(p_func);
+    try_get_cpu_frequency_info().ok().flatten()
+}
+pub fn try_get_cpu_frequency_info() -> Result<Option<(u32,u32,u32)>,String> {
+    with_power_library(|library|unsafe{
+        let entry=GetProcAddress(library,s!("CallNtPowerInformation"))
+            .ok_or("Windows does not expose CallNtPowerInformation")?;
+        let func:FnCallNtPowerInformation=std::mem::transmute(entry);
         let mut info: [ProcessorPowerInformation; 64] = [ProcessorPowerInformation::default(); 64];
         let buf_size = std::mem::size_of_val(&info) as u32;
         // 11 = ProcessorInformation
         let status = func(11, std::ptr::null(), 0, info.as_mut_ptr() as *mut std::ffi::c_void, buf_size);
-        if status == 0 && info[0].max_mhz > 0 {
-            Some((info[0].current_mhz, info[0].max_mhz, info[0].mhz_limit))
-        } else {
-            None
-        }
-    }
+        if status!=0{return Err(format!("CallNtPowerInformation failed: {status:#010x}"));}
+        Ok((info[0].max_mhz>0).then_some((info[0].current_mhz,info[0].max_mhz,info[0].mhz_limit)))
+    })
 }
 
 static POWER_MODE_LOCK: std::sync::Mutex<Option<(u8, std::time::Instant)>> = std::sync::Mutex::new(None);
@@ -160,8 +164,7 @@ pub fn apply_full_power_mode(ui_mode: u8) {
 /// Set Windows Power Overlay Scheme slider (Best Efficiency / Balanced / Best Performance)
 pub fn apply_native_windows_overlay(mode:u8)->Result<(),String> {
     let guid=match mode {1=>&GUID_OFFICE_SAVER,2|4=>&GUID_BALANCED,3=>&GUID_TURBO_PERF,_=>return Err("Invalid power mode".into())};
-    let result=set_active_overlay_scheme(guid as *const GUID);
-    if result==0{Ok(())}else{Err(format!("Windows power overlay failed: {}",result))}
+    set_active_overlay_scheme(guid as *const GUID)
 }
 pub fn apply_windows_power_overlay(ui_mode: u8) {
     let cfg = crate::system::config::load_config();
@@ -185,13 +188,12 @@ pub fn apply_windows_power_overlay(ui_mode: u8) {
         _ => (&GUID_BALANCED as *const GUID, "GUID_BALANCED (平衡)"),
     };
 
-    let ret = set_active_overlay_scheme(guid_ptr);
-    if ret == 0 {
+    if let Err(error)=set_active_overlay_scheme(guid_ptr) {
+        crate::log_warn!("POWER_MODE", "PowerSetActiveOverlayScheme failed for mode {} ({}): {}",ui_mode,name,error);
+        crate::log_warn!("CUSTOM_TRACE", "PowerSetActiveOverlayScheme failed for mode {} ({}): {}",ui_mode,name,error);
+    }else{
         crate::log_info!("POWER_MODE", "PowerSetActiveOverlayScheme succeeded for mode {} ({})", ui_mode, name);
         crate::log_info!("CUSTOM_TRACE", "PowerSetActiveOverlayScheme succeeded for mode {} ({})", ui_mode, name);
-    } else {
-        crate::log_warn!("POWER_MODE", "PowerSetActiveOverlayScheme failed with code {} for mode {} ({})", ret, ui_mode, name);
-        crate::log_warn!("CUSTOM_TRACE", "PowerSetActiveOverlayScheme failed with code {} for mode {} ({})", ret, ui_mode, name);
     }
 }
 

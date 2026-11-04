@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 namespace OpenRevo.Core;
@@ -43,19 +43,18 @@ public static class DesktopPower
     }
     public static Guid Overlay()
     {
-        uint error=PowerGetEffectiveOverlayScheme(out var pointer);if(error!=0)throw new Win32Exception((int)error);
-        try{return Marshal.PtrToStructure<Guid>(pointer);}finally{LocalFree(pointer);}
+        uint error=PowerGetEffectiveOverlayScheme(out Guid scheme);if(error!=0)throw new Win32Exception((int)error);
+        return scheme;
     }
     public static void SetOverlay(UpstreamCoreLibrary core,int mode)
     {
-        Guid expected=mode switch{1=>new("961cc777-2547-4f9d-8174-7d86181b8a7a"),2=>Guid.Empty,3 or 4=>new("ded574b5-45a0-4f42-8737-46345c09c238"),_=>throw new ArgumentOutOfRangeException(nameof(mode))};
+        Guid expected=mode switch{1=>new("961cc777-2547-4f9d-8174-7d86181b8a7a"),2 or 4=>Guid.Empty,3=>new("ded574b5-45a0-4f42-8737-46345c09c238"),_=>throw new ArgumentOutOfRangeException(nameof(mode))};
         core.ExecuteFeature(3,new{mode});
         if(Overlay()!=expected)throw new IOException("Windows性能策略回读未确认。");
     }
     [DllImport("powrprof.dll")]private static extern uint PowerReadACValueIndex(nint root,ref Guid scheme,ref Guid group,ref Guid setting,out uint value);
     [DllImport("powrprof.dll")]private static extern uint PowerReadDCValueIndex(nint root,ref Guid scheme,ref Guid group,ref Guid setting,out uint value);
-    [DllImport("powrprof.dll")]private static extern uint PowerGetEffectiveOverlayScheme(out nint pointer);
-    [DllImport("kernel32.dll")]private static extern nint LocalFree(nint pointer);
+    [DllImport("powrprof.dll")]private static extern uint PowerGetEffectiveOverlayScheme(out Guid scheme);
 }
 public sealed class DesktopServicePreferences
 {
@@ -72,7 +71,7 @@ public sealed partial class UpstreamCoreLibrary:IDesktopPowerCore
     public void StopDesktopServices()
     {
         DiagnosticLog.Record("core.services.shutdown.waiting");
-        lock(gate)
+        lock(gate) lock(winLockGate)
         {
             ObjectDisposedException.ThrowIf(library==0,this);
             if(NativeLibrary.TryGetExport(library,"or_native_services_shutdown",out var cleanup))
@@ -81,14 +80,14 @@ public sealed partial class UpstreamCoreLibrary:IDesktopPowerCore
                 var watch=System.Diagnostics.Stopwatch.StartNew();
                 int result=Marshal.GetDelegateForFunctionPointer<CameraAccess>(cleanup)();
                 DiagnosticLog.Record("core.services.shutdown.result",new{result,elapsedMs=watch.ElapsedMilliseconds});
-                if(result!=0)throw new IOException($"全局色彩滤镜未能恢复（{result}），请关闭增强后再退出。");
+                if(result!=0)throw new IOException($"桌面服务或 Win 软件锁未能释放（{result}），请重试退出。");
             }
         }
     }
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate int FeatureSet(uint action,nint data,nuint length);
     public void ExecuteFeature(uint action,object request)
     {
-        if(action is <1 or >11)throw new ArgumentOutOfRangeException(nameof(action));
+        if(action is <1 or >13)throw new ArgumentOutOfRangeException(nameof(action));
         byte[] bytes=JsonSerializer.SerializeToUtf8Bytes(request);
         if(bytes.Length>24*1024*1024)throw new ArgumentOutOfRangeException(nameof(request));
         lock(gate)
