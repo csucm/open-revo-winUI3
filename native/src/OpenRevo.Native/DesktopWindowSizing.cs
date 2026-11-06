@@ -6,7 +6,8 @@ using Windows.Graphics;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
-    private const int DesktopMinimumWidth=840,DesktopMinimumHeight=600;
+    // Keep the collapsed-navigation overview above its four-column breakpoint.
+    private const int DesktopMinimumWidth=900,DesktopMinimumHeight=600;
     private readonly DesktopSurface desktopSurface=new();
     private bool desktopViewportQueued;
     [StructLayout(LayoutKind.Sequential)]private struct TrackPoint{public int X,Y;}

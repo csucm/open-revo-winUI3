@@ -72,6 +72,7 @@ public sealed partial class HardwareSession
     }
     private bool RecognizedTuningProtocol(FanProtocolState fans)
     {
+        if(UsesProductionClassicCore)return CoreMachine.Library.RecognizesClassicFanProtocol(fans,false);
         if(fans.Custom==64)return Enumerable.Range(1,3).Any(mode=>SameTables(fans,FactoryForMachine(fans,mode)));
         if(fans.Custom!=65||fans.Latch!=4||(fans.ApControl&129)!=129||fans.CpuDuty[0]!=0||fans.GpuDutyAndControl[0]!=0)return false;
         if((fans.Isolated&128)==0)return SameTables(fans,FactoryForMachine(fans,3));
@@ -136,14 +137,26 @@ public sealed partial class HardwareSession
         audit(new{at=DateTimeOffset.Now,operation="custom-tuning-intent",before,profile=p});
         try
         {
-            void Write(ushort address,int value,int ignore=0){Guard();byte desired=checked((byte)value);if(!ec.Write(address,desired)||ec.Read(address) is not byte actual||(actual&~ignore)!=(desired&~ignore))throw new IOException("调校写入回读不一致。");}
+            List<ClassicControlStep> steps=[];
+            void Flush()=>FlushClassicControls(root.Project,steps);
+            void Write(ushort address,int value,int ignore=0)
+            {
+                byte desired=checked((byte)value);
+                if(UsesProductionClassicCore){steps.Add(new(address,desired,ignore));return;}
+                Guard();
+                if(!ec.Write(address,desired)||ec.Read(address) is not byte actual||(actual&~ignore)!=(desired&~ignore))
+                    throw new IOException("调校写入回读不一致。");
+            }
             Write(Vault.FanClamp,before.Performance.Clamp|Vault.FanBoostMask);
             // Yield an already active custom mode before staging power values.
             // This avoids transient PL1/PL2 inversions while replacing its draft.
             Write(Vault.CustomMode,before.Performance.Fans.Custom&~1);
             Write(Vault.FanLatch,4);Write(Vault.FanLatch,0);Write(Vault.ApControl,fans.ApControl);
-            foreach(var (start,values) in new[]{(Vault.CpuUpBase,fans.CpuUp),(Vault.CpuDownBase,fans.CpuDown),(Vault.CpuDutyBase,fans.CpuDuty),(Vault.GpuUpBase,fans.GpuUp),(Vault.GpuDownBase,fans.GpuDown),(Vault.GpuDutyBase,fans.GpuDutyAndControl)})
-                for(int i=0;i<16;i++)Write((ushort)(start+i),values[i]);
+            var tables=new[]{(Vault.CpuUpBase,fans.CpuUp),(Vault.CpuDownBase,fans.CpuDown),(Vault.CpuDutyBase,fans.CpuDuty),
+                (Vault.GpuUpBase,fans.GpuUp),(Vault.GpuDownBase,fans.GpuDown),(Vault.GpuDutyBase,fans.GpuDutyAndControl)};
+            Flush();
+            if(UsesProductionClassicCore)WriteClassicFanTables(root.Project,tables);
+            else foreach(var (start,values) in tables)for(int i=0;i<16;i++)Write((ushort)(start+i),values[i]);
             CheckPower();
             // Custom mode is asserted only after the complete power/fan draft is staged.
             Write(Vault.CustomPl1,p.Pl1);Write(Vault.CustomPl2,p.Pl2);Write(Vault.CustomPl4,p.Pl4);
@@ -162,12 +175,13 @@ public sealed partial class HardwareSession
             Write(Vault.SilentFlag,fans.Silent,1);Write(Vault.Trigger,target.Trigger,Vault.RgbEnableMask|Vault.SilentMask);
             Write(Vault.CustomMode,fans.Custom);Write(Vault.FanLatch,fans.Latch);
             Write(Vault.FanClamp,clamp|Vault.FanBoostMask);
+            Flush();
             if(caps.Supported&&p.Offsets!=before.Gpu.Offsets){CheckPower();core.SetClockOffsets(before.Gpu.Offsets!,p.Offsets!);}
-            CheckPower();Write(Vault.FanClamp,clamp);
+            CheckPower();Write(Vault.FanClamp,clamp);Flush();
             var after=ReadTuning(ec,core);var r=after.Registers;
             if(!SamePerformance(after.Performance,target)||r.Pl1!=p.Pl1||r.Pl2!=p.Pl2||r.Pl4!=p.Pl4||r.Tcc!=tcc||
                caps.Supported&&(r.DbControl!=dbControl||r.DbFlag!=255||r.DbWatts!=boost||r.TgpOffset!=offset||after.Gpu.Offsets!=p.Offsets))throw new IOException("最终调校状态与草稿不一致。");
-            expected=Read(ec);PerformanceState=after.Performance;TuningState=after;
+            expected=Read(ec);PerformanceState=after.Performance;TuningState=after;SynchronizePerformanceIndicator(after.Performance.Mode);
             var receipt=new TuningReceipt(before,after,p);audit(new{at=DateTimeOffset.Now,operation="custom-tuning-confirmed",receipt});lastTuning=receipt;lastPerformance=null;return receipt;
         }
         catch(Exception error)

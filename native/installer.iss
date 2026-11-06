@@ -1,6 +1,6 @@
 #define AppName "Open-Revo"
 #ifndef AppVersion
-#define AppVersion "0.9.8"
+#define AppVersion "0.6.9"
 #endif
 #ifndef AppPayloadDir
 #define AppPayloadDir "app-" + AppVersion + "-shared"

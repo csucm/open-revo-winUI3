@@ -90,9 +90,12 @@ pub struct ModelCapabilities {
     pub battery_limit_mode: Option<String>,
     #[serde(default = "default_true")]
     pub fn_lock: bool,
+    #[serde(default)]
+    pub fn_lock_via_ec: bool,
     pub power_modes: Vec<String>,
     #[serde(default)]
     pub power_mode_watts: Option<HashMap<String, u32>>,
+    #[serde(alias = "keyboard")]
     pub rgb_keyboard: Option<KeyboardCapability>,
 }
 

@@ -48,29 +48,35 @@ public sealed partial class MainWindow
     private void RememberPanelShape()
     {
         if(uiReviewMode)return;
-        systemPreferences=systemPreferences with{LastMini=mini};
+        systemPreferences=systemPreferences with{LastMini=panelShapeChanging?panelGoalMini:mini};
         try{systemPreferences.Save();}catch(Exception error){actions.Add("窗口记忆："+error.Message);}
     }
     private bool HideToTray()
     {
+        overviewDrag?.Cancel(); CancelMiniDrags();
         if(uiReviewMode&&!trayReviewMode||exitRequested||settingsDataBusy||dataStorageExitPending)return false;
         if(!trayAvailable)AddTrayIcon();if(!trayAvailable){_=ShowMessage("托盘不可用","图标创建失败，窗口保持可见；可在设置页退出程序。");return false;}
-        RememberPanelShape();ResetCaptionHover();trayHidden=true;panelMotionStop?.Cancel();AppWindow.Hide();UpdatePolling();return true;
+        RememberPanelShape();ResetCaptionHover();trayHidden=true;HidePanelHandoff();AppWindow.Hide();UpdatePolling();return true;
     }
     internal void StartHiddenToTray()=>DispatcherQueue.TryEnqueue(()=>HideToTray());
     private void WakeFromTray(string? mode=null)
     {
         if(closed||exitRequested)return;
         string preferred=mode??systemPreferences.WakeMode;bool targetMini=preferred=="mini"||preferred=="remember"&&systemPreferences.LastMini;
+        bool refreshAfterHidden = trayHidden && !lowRefreshOnBattery;
         trayHidden=false;
-        if(mini!=targetMini)ToggleMini();
+        if(panelShapeChanging)SetPanelGoal(targetMini);else if(mini!=targetMini)ToggleMini();
         if(AppWindow.Presenter is OverlappedPresenter presenter&&presenter.State==OverlappedPresenterState.Minimized)presenter.Restore();
+        if(targetMini&&!panelShapeChanging)PositionMiniAtBottomRight();
         ResetCaptionHover();AppWindow.Show();Activate();SetForegroundWindow(captionWindow);UpdatePolling();
+        if (refreshAfterHidden) _ = CheckAutomaticRefresh();
     }
-    private bool RuntimeBusy=>panelShapeChanging||trayHoverRead is {IsCompleted:false}||updateBusy||hardwareBusy||quickBusy||requestedWinLocked.HasValue||takeoverChanging||tuningApplying||displayBusy||brightnessApplying||gpuChanging||desktopServiceBusy||sleepOfficeBusy||settingsDataBusy||settingsPowerBusy||batteryGuardBusy;
+    private bool RuntimeBusy=>panelShapeChanging||trayHoverRead is {IsCompleted:false}||updateBusy||hardwareBusy||quickBusy||requestedWinLocked.HasValue||takeoverChanging||tuningApplying||displayBusy||brightnessApplying||displayTopologyReading||gpuChanging||desktopServiceBusy||sleepOfficeBusy||settingsDataBusy||settingsPowerBusy||batteryGuardBusy;
     private async Task ExitFromTray()
     {
-        if(exitInProgress||closed)return;exitInProgress=true;exitRequested=true;
+        if(exitInProgress||closed)return;
+        if(miniDraft!=null||miniSaving){if(trayHidden){AppWindow.Show();Activate();trayHidden=false;}if(!await CanLeaveMiniEditor())return;}
+        exitInProgress=true;exitRequested=true;HidePanelHandoff();
         var watch=System.Diagnostics.Stopwatch.StartNew();
         DiagnosticLog.Record("exit.requested",ExitDiagnosticState());
         try
@@ -95,7 +101,7 @@ public sealed partial class MainWindow
         {
             AppendMenu(menu,0,1,"打开控制面板");AppendMenu(menu,0,2,"打开迷你面板");AppendMenu(menu,0,3,"打开完整面板");AppendMenu(menu,0,4,"设置与诊断");AppendMenu(menu,0,5,"检查更新");AppendMenu(menu,0x800,0,"");AppendMenu(menu,0,9,"退出 Open-Revo");
             GetCursorPos(out var point);SetForegroundWindow(captionWindow);uint command=TrackPopupMenu(menu,0x100|0x80,point.X,point.Y,0,captionWindow,0);
-            DispatcherQueue.TryEnqueue(()=>{if(command==9){_=ExitFromTray();return;}if(command is 1 or 2 or 3 or 4 or 5){if(command is 4 or 5){currentPage=command==5?"updates":"settings";customTuningOpen=colorTuningOpen=false;}WakeFromTray(command==2?"mini":command is 3 or 4 or 5?"full":null);if(command is 4 or 5)Render();}});
+            DispatcherQueue.TryEnqueue(()=>{if(command==9){_=ExitFromTray();return;}if(command is 1 or 2 or 3 or 4 or 5){WakeFromTray(command==2?"mini":command is 3 or 4 or 5?"full":null);if(command is 4 or 5)PaintNavigate(command==5?"updates":"settings");}});
         }
         finally{DestroyMenu(menu);}
     }
@@ -131,5 +137,6 @@ public sealed partial class MainWindow
     [DllImport("user32.dll")]private static extern bool DestroyMenu(nint menu);
     [StructLayout(LayoutKind.Sequential)]private struct TrayPoint{public int X,Y;}
 }
+
 
 

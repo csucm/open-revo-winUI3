@@ -17,6 +17,8 @@ internal static class UpdateChecks
         var release=ReleaseUpdater.ParseReleases(Json(Release()),new Version(0,9,6))!;
         Check("Native prerelease is selected",()=>Assert(release.Version==new Version(0,9,7)));
         Check("Current version never reinstalls",()=>Assert(ReleaseUpdater.ParseReleases(Json(Release()),new Version(0,9,7))==null));
+        object PublicRelease(string version)=>new{tag_name="native-v"+version,draft=false,prerelease=true,assets=new[]{new{name=$"Open-Revo-{version}-Setup-x64.exe",browser_download_url=$"https://github.com/{ReleaseUpdater.Repository}/releases/download/native-v{version}/Open-Revo-{version}-Setup-x64.exe",size=data.Length,digest="sha256:"+sha}}};
+        Check("Public 0.6.10 follows 0.6.9 numerically",()=>Assert(ReleaseUpdater.ParseReleases(Json(PublicRelease("0.6.8"),PublicRelease("0.6.9"),PublicRelease("0.6.10")),new Version(0,6,9))?.Version==new Version(0,6,10)));
         Check("Draft and upstream tag are ignored",()=>Assert(ReleaseUpdater.ParseReleases(Json(Release(draft:true),Release("v0.9.7")),new Version(0,9,6))==null));
         foreach(var (name,item) in new[]{("foreign URL",Release(url:"https://example.com/setup.exe")),("bad hash",Release(hash:"bad")),("oversize",Release(size:ReleaseUpdater.MaximumInstallerSize+1))})
             Check("Reject "+name,()=>{try{ReleaseUpdater.ParseReleases(Json(item),new Version(0,9,6));throw new Exception("accepted");}catch(IOException){}});

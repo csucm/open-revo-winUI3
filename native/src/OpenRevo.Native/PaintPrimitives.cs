@@ -161,7 +161,9 @@ internal sealed class PaintSelect:PaintButton
 {
     internal string[] Items{get;private set;}=[];
     private int index=-1;private readonly TextBlock label=Paint.Text("待读取");private Popup? popup;
-    internal int SelectedIndex{get=>index;set{index=value;label.Text=value>=0&&value<Items.Length?Items[value]:"待读取";}}
+    private string unselectedText="待读取";
+    internal string UnselectedText{get=>unselectedText;set{if(unselectedText==value)return;unselectedText=value;if(index<0||index>=Items.Length)label.Text=value;}}
+    internal int SelectedIndex{get=>index;set{index=value;label.Text=value>=0&&value<Items.Length?Items[value]:unselectedText;}}
     internal event Action<int>? Changed;
     internal PaintSelect(string name,string[] items,int selected,Action<int>? changed=null):base(name)
     {

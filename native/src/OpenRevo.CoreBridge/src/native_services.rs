@@ -3,7 +3,12 @@ use std::sync::Mutex;
 static LAST_ERROR:Mutex<String>=Mutex::new(String::new());
 #[no_mangle]
 pub extern "C" fn or_native_services_shutdown()->i32 {
-    match catch_unwind(||openrevo_core::system::native_services::shutdown()) {Ok(Ok(()))=>0,_=>-4}
+    match catch_unwind(||{
+        openrevo_core::system::win_key_hook::set_locked(false)?;
+        super::native_admission::release_declared_curve();
+        openrevo_core::driver::bld_driver_mgr::stop_bld_rainbow();
+        openrevo_core::system::native_services::shutdown()
+    }) {Ok(Ok(()))=>0,_=>-4}
 }
 pub(super) fn last_error()->String{LAST_ERROR.lock().unwrap_or_else(|e|e.into_inner()).clone()}
 // One bounded, single-execution command; no two-pass mutation protocol or arbitrary address.
@@ -12,6 +17,8 @@ pub unsafe extern "C" fn or_native_feature_set(action:u32,input:*const u8,length
     match catch_unwind(||{
         if input.is_null()||length==0||length>24*1024*1024{return Err("Invalid service request".to_string());}
         let value=serde_json::from_slice(std::slice::from_raw_parts(input,length)).map_err(|e|e.to_string())?;
+        if action == 13 { return super::native_admission::apply_classic_transaction(value); }
+        if action == 12 { return super::native_admission::apply_declared_cpu_profile(value); }
         openrevo_core::system::native_services::execute(action,value)
     }){
         Ok(Ok(()))=>{LAST_ERROR.lock().unwrap_or_else(|e|e.into_inner()).clear();0},
@@ -61,3 +68,4 @@ mod tests {
         assert!(execute(6,serde_json::json!({"zone":"front","enabled":true,"brightness":99,"effect":1,"speed":2,"color":"#123456"})).is_err());
     }
 }
+

@@ -9,6 +9,7 @@ use std::{ffi::c_void,ptr};
 pub struct CpuSample {pub mhz:Option<u32>,pub usage:Option<u32>,pub power_w:Option<f32>,pub power_estimated:bool}
 #[derive(Default,Clone,Serialize)]
 pub struct GpuSample {
+    pub adapter_name:Option<String>,
     pub temperature:Option<u32>,pub core_mhz:Option<u32>,pub memory_mhz:Option<u32>,
     pub usage:Option<u32>,pub memory_total_bytes:Option<u64>,pub memory_used_bytes:Option<u64>,pub power_w:Option<f32>,
 }
@@ -125,6 +126,18 @@ pub fn read_gpu()->GpuSample {
         if init()!=0{return sample;}
         struct Guard(Init);impl Drop for Guard{fn drop(&mut self){unsafe{(self.0)();}}}let _guard=Guard(shutdown);
         let mut device=ptr::null_mut();if handle(0,&mut device)!=0{return sample;}
+        // Name and sensors belong to the same NVML handle. Never substitute an
+        // unrelated Windows adapter name for this device-index-0 sample.
+        type GetName=unsafe extern "C" fn(*mut c_void,*mut std::ffi::c_char,u32)->i32;
+        if let Some(name)=symbol::<GetName>(&lib,b"nvmlDeviceGetName"){
+            let mut buffer=[0u8;96];
+            if name(device,buffer.as_mut_ptr().cast(),buffer.len() as u32)==0 {
+                if let Some(end)=buffer.iter().position(|b|*b==0){
+                    let value=String::from_utf8_lossy(&buffer[..end]).trim().to_owned();
+                    if !value.is_empty(){sample.adapter_name=Some(value);}
+                }
+            }
+        }
         if let Some(clock)=symbol::<Clock>(&lib,b"nvmlDeviceGetClockInfo"){
             let mut v=0;if clock(device,0,&mut v)==0&&v<=10000 {sample.core_mhz=Some(v);}
             if clock(device,2,&mut v)==0&&v<=30000 {sample.memory_mhz=Some(v);}

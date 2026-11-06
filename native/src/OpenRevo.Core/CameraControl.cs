@@ -10,8 +10,6 @@ namespace OpenRevo.Core;
 public sealed record CameraState(string InstanceId, bool? Enabled);
 public static class CameraControl
 {
-    // Verified integrated HD Webcam on GM6IQ0C. Never select by class alone.
-    private const string BuiltinPrefix=@"USB\VID_2B7E&PID_B651&MI_00\";
     private static readonly Guid CameraClass=new("ca3e7ab9-b4c3-4ae6-8251-579ef933890f");
     public static bool MachineAccessBlocked()
     {
@@ -28,33 +26,70 @@ public static class CameraControl
     [DllImport("setupapi.dll",CharSet=CharSet.Unicode,SetLastError=true)] private static extern bool SetupDiGetDeviceInstanceIdW(nint set,ref DeviceInfo info,StringBuilder id,uint size,out uint required);
     [DllImport("setupapi.dll")] private static extern bool SetupDiDestroyDeviceInfoList(nint set);
     [DllImport("cfgmgr32.dll")] private static extern uint CM_Get_DevNode_Status(out uint status,out uint problem,uint instance,uint flags);
-    public static CameraState? Read()
+    // Read-only Windows inventory. The verified-device whitelist below remains
+    // mandatory for legacy device/firmware writes; inventory never selects one.
+    public static IReadOnlyList<CameraState> ReadWindowsCandidates()
     {
-        nint set=SetupDiGetClassDevsW(CameraClass,null,0,0);
-        if(set==-1)return null;
+        nint set=SetupDiGetClassDevsW(CameraClass,null,0,2); // DIGCF_PRESENT
+        if(set==-1)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         try
         {
-            var matches=new List<CameraState>();
-            for(uint i=0;;i++)
+            var candidates=new List<CameraState>();
+            for(uint i=0;i<256;i++)
             {
                 var info=new DeviceInfo{Size=(uint)Marshal.SizeOf<DeviceInfo>()};
                 if(!SetupDiEnumDeviceInfo(set,i,ref info))
                 {
-                    if(Marshal.GetLastWin32Error()!=259)return null;
-                    break;
+                    int code=Marshal.GetLastWin32Error();if(code==259)return candidates;
+                    throw new System.ComponentModel.Win32Exception(code);
                 }
                 var id=new StringBuilder(1024);
-                if(!SetupDiGetDeviceInstanceIdW(set,ref info,id,1024,out _))return null;
-                if(!id.ToString().StartsWith(BuiltinPrefix,StringComparison.OrdinalIgnoreCase))continue;
+                if(!SetupDiGetDeviceInstanceIdW(set,ref info,id,1024,out _))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
                 bool? enabled=null;
                 if(CM_Get_DevNode_Status(out uint status,out uint problem,info.Instance,0)==0)
                     enabled=problem==22?false:problem==0&&(status&8)!=0?true:null;
-                matches.Add(new(id.ToString(),enabled));
+                candidates.Add(new(id.ToString(),enabled));
             }
-            return matches.Count==1?matches[0]:null;
+            throw new IOException("摄像设备数量超出只读枚举上限。");
         }
-        finally {SetupDiDestroyDeviceInfoList(set);}
+        finally{SetupDiDestroyDeviceInfoList(set);}
     }
+    public static CameraState? Read()
+    {
+        var devices = ReadWindowsCandidates();
+        return devices.Count == 1 ? devices[0] : null;
+    }
+
+    public static async Task SetWindowsDeviceAsync(CameraState expected, bool enabled)
+    {
+        var candidates = ReadWindowsCandidates();
+        if (candidates.Count != 1 || candidates[0] != expected || expected.Enabled != !enabled)
+            throw new IOException("Windows 相机设备或状态已变化，请刷新后重试。");
+
+        var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "pnputil.exe"))
+        { UseShellExecute = false, CreateNoWindow = true };
+        start.ArgumentList.Add(enabled ? "/enable-device" : "/disable-device");
+        start.ArgumentList.Add(expected.InstanceId);
+        using var process = Process.Start(start) ?? throw new IOException("无法启动 Windows 相机设备设置。");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        try { await process.WaitForExitAsync(timeout.Token); }
+        catch (OperationCanceledException)
+        {
+            throw new IOException("Windows 相机操作超时，请先重新读取设备状态。");
+        }
+        if (process.ExitCode != 0)
+            throw new IOException($"Windows 相机设置未完成（{process.ExitCode}）。");
+
+        for (int attempt = 0; attempt < 10; attempt++)
+        {
+            var current = ReadWindowsCandidates();
+            if (current.Count == 1 && current[0].InstanceId == expected.InstanceId && current[0].Enabled == enabled)
+                return;
+            await Task.Delay(150);
+        }
+        throw new IOException("Windows 相机设备状态未回读确认。");
+    }
+
     public static async Task Request(bool enabled)
     {
         string? blocked=HardwareSession.CheckEnvironment();if(blocked!=null)throw new InvalidOperationException(blocked);
@@ -116,3 +151,5 @@ public static class CameraControl
     }
     public static bool NeedsDeviceTransition(bool? current,bool target)=>current.HasValue&&current.Value!=target;
 }
+
+

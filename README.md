@@ -1,6 +1,23 @@
-# OpenRevo Native 0.6.8 · 全界面重写与交互大更新
+# OpenRevo Native 0.6.9
 
-> 公开发布编号现使用 0.6 系列。当前最新公开预发行版为 [0.6.85](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.6.85)。历史版本仅调整发布标识，原安装包及源码内容保持，内部仍显示原 0.9.x 编号。内部测试代号单独管理。旧版自动更新无法识别此次降号，首次迁移请从发布页手动下载。下文保留 0.6.8 界面大更新的介绍。
+Windows x64 · WinUI 3 社区预发布版
+
+当前版本 **0.6.9** 已更新机型适配、GPU 读取、模式与电池控制，加入 mini 自定义、双向拖动交换、切屏亮度重读及诊断 Bug 提交。
+
+[下载 0.6.9 安装包](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.6.9/Open-Revo-0.6.9-Setup-x64.exe) · [完整对应源码](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.6.9/native-source-0.6.9.zip) · [相比 0.6.8 的更新日志](docs/releases/0.6.9.md) · [发布页](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.6.9)
+
+- 修复部分机型模式切换误拒绝、已验证机型电池档位误禁用及 NVIDIA 独显型号缺失。
+- mini 支持布局与六槽快捷按钮自定义；编辑拖动跨区保持顶层可见，支持双向交换和取消。
+- 每次切屏后重新读取亮度，拖动百分比即时跟随；总览增加 CPU/GPU 型号并保留最小窗口四列布局。
+- 新增网页 Issue 提交、关于赞助与交流群入口，统一公开版本显示。
+
+**升级提示：** 历史 0.6.8 仅改发布标识，原安装包内部仍显示 0.9.8，可能无法自动识别 0.6.9。请从本页手动下载安装。当前软件与安装器使用公开版本 0.6.9，内部测试代号独立管理。
+
+共享 .NET 10 x64 Desktop Runtime 与 Windows App Runtime；安装器保留运行时检测及引导。GPL-3.0-or-later 社区移植版，保留上游版权。插件仍在开发中。
+
+## 0.6.8 界面介绍与历史截图
+
+下方保留 0.6.8 的界面说明和当时的截图，当前变化以 [0.6.9 更新日志](docs/releases/0.6.9.md) 为准。
 
 Windows x64 · WinUI 3 社区预发布版 · 2026-11-03
 

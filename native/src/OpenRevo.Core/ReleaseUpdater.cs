@@ -17,6 +17,7 @@ public sealed class ReleaseUpdater
     private readonly HttpClient client;
     public ReleaseUpdater(HttpClient client) => this.client = client;
 
+
     public static NativeRelease? ParseReleases(string json, Version current)
     {
         using var doc = JsonDocument.Parse(json);
@@ -70,7 +71,7 @@ public sealed class ReleaseUpdater
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, release.Installer);
-            request.Headers.UserAgent.ParseAdd("OpenRevo-Native-Updater/1");
+            request.Headers.UserAgent.ParseAdd("OpenRevo-Native-Updater/" + release.Version.ToString(3));
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
             response.EnsureSuccessStatusCode();
             if (response.Content.Headers.ContentLength is long length && length != release.Size) throw new IOException("下载长度与发布信息不符。");

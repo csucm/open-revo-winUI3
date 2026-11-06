@@ -78,6 +78,7 @@ internal static class PaintPageSchema
                 new("settings-0-2","mini 点击外部收起","完整面板不受影响。","toggle",""),
                 new("settings-0-4","动效速度","支持更快、更慢或关闭。Windows 减少动画优先。","select",""),
                 new("settings-0-3","OSD 屏幕提示","风格、大小、位置与预览","link",""),
+                new("settings-0-5","小面板自定义","排列磁贴与六个快捷位置","link",""),
             ]),
             new("运行与设备","power",1,false,[
                 new("settings-1-0","开机自动启动","登录后最小化至托盘。","toggle",""),
@@ -97,6 +98,7 @@ internal static class PaintPageSchema
                 new("settings-3-3","退出程序","退出后释放防休眠状态。","button",""),
             ]),
             new("关于","info",2,false,[
+                new("settings-4-2","项目仓库与版本","","repository",""),
                 new("settings-4-1","软件更新","手动检查社区版发布。","update",""),
                 new("settings-4-0","开源许可","基于 faintonce/open-revo / openrevo-core","status",""),
             ]),
@@ -129,6 +131,7 @@ internal static class PaintPageSchema
                 new("diagnostics-0-0","导出范围","设备信息、运行状态、异常和审计；按现有导出实现。","status",""),
                 new("diagnostics-0-1","打开默认目录","","button",""),
                 new("diagnostics-0-2","选择位置并导出","取消选择不产生文件。","button",""),
+                new("diagnostics-0-3","提交 Bug","在 GitHub 填写问题并上传日志文件。","button",""),
             ]),
             new("额外调试日志","settings",1,false,[
                 new("diagnostics-1-0","日志等级","","select",""),

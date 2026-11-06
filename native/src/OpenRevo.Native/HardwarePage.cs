@@ -25,12 +25,12 @@ public sealed partial class MainWindow
             if(!toggle.IsOn)
             {
                 hardware.Release();tuningBaseline=null;tuningDraft=null;
-                quickState=quickState with{Camera=null,WinLocked=null};
+                quickState=quickState with{Camera=null};
                 hardwareMessage="已停止本次硬件控制。";UpdateControlValues();return;
             }
             toggle.IsEnabled=false;
             await RunHardware(()=>{var state=hardware.Takeover();if(!hardware.CoreDelegated)hardware.ProbePerformance();return new{connected=hardware.Active,state};},"已重新读取并接管。");
-            if(hardware.Active){await LoadPanelHardware();quickState=await Task.Run(ReadQuickState);}
+            if(hardware.Active){await LoadPanelHardware();ApplyQuickRead(await Task.Run(ReadQuickState));}
             }
             finally{takeoverChanging=false;if(!closed)UpdateControlValues();}
         };
@@ -49,20 +49,30 @@ public sealed partial class MainWindow
             int? beforeLimit=hardware.State?.Upper;var result=await Task.Run(operation);actions.Add(JsonSerializer.Serialize(result));
             trace.Complete(new{result});
             if(hardware.State is {} charge&&beforeLimit!=charge.Upper)ConfirmedActionOsd("充电上限 · "+charge.Upper+"%","battery");if(success.Contains("撤销")&&success.Contains("灯光"))ConfirmedActionOsd("已撤销上次灯光更改","lighting");
-            hardwareMessage=success;controlAt=DateTimeOffset.Now;ecEnabled=true;lastEc=DateTimeOffset.MinValue;
+            hardwareMessage=success+((result is PerformanceReceipt or TuningReceipt)&&hardware.ModeIndicatorWarning is {} warning?" "+warning:"");controlAt=DateTimeOffset.Now;ecEnabled=true;lastEc=DateTimeOffset.MinValue;
             if(hardware.State is {} state)ec=ec with{BatteryLimit=state.Upper,FanBoost=state.FanBoost};
             if(actions.Count>128)actions.RemoveRange(0,actions.Count-128);
+        }
+        catch(AcPowerRequiredException error)
+        {
+            trace.Complete(new{outcome="ac-power-required"});
+            hardwareMessage=error.Message;
+            actions.Add($"{DateTimeOffset.Now:O} hardware operation blocked: {error.Message}");
+            if(!closed)await ShowMessage("需要接通电源",error.Message);
         }
         catch(Exception error)
         {
             trace.Fail(error,new{page=currentPage,connected=hardware.Active});
-            hardwareMessage="设置未完成，可到设置中重新接管。";actions.Add($"{DateTimeOffset.Now:O} hardware operation stopped: {error.Message}");
-            if(!closed)await ShowMessage("设置未完成","已停止后续操作。请检查连接，并在设置中关闭再打开硬件接管开关。");
+            bool active=hardware.Active;
+            hardwareMessage=active?"本次设置未完成，硬件仍已接管。":"操作已停止，请重新读取并接管。";
+            actions.Add($"{DateTimeOffset.Now:O} hardware operation stopped: {error.Message}");
+            if(!closed)await ShowMessage("设置未完成",error.Message+"\n\n"+(active?"硬件仍已接管，可继续使用其他已支持功能。":"请在设置中关闭再打开硬件接管，重新读取当前状态。"));
         }
         finally{hardwareBusy=false;operationQueue.Release();if(!closed){UpdateControlValues();Tick();}}
     }
     private void UpdateControlValues()
     {
+        SynchronizeModeKeyMonitor();
         RefreshPaintedState();
         if(takeoverSwitch!=null)
         {

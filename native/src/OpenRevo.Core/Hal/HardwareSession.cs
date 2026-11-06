@@ -7,24 +7,19 @@ namespace OpenRevo.Core.Hal;
 public sealed record ControlState(byte Project, byte FanClamp, byte Upper, byte Lower, byte BatteryMode, byte Platform, byte Support1, byte Support2, byte PowerStatus)
 {
     public bool FanBoost => (FanClamp & Vault.FanBoostMask) != 0;
-    // Some GM6IQ0C firmware omits the generic support bit. Only accept its complete
-    // existing factory preset contract; never infer support from a single byte.
+    // GM6IQ0C/verified Project 16 can retain preset thresholds after its selector
+    // resets to LongLife. Keep the exact upper/lower contract and project guard.
     public bool BatteryControlAvailable => (Support2 & Vault.BatterySupportMask) != 0 ||
         Project is >0 and <255 && Lower == Upper - 5 &&
-        (Upper, BatteryMode & Vault.BatteryModeMask) is (60, Vault.BatteryStation) or (80, Vault.BatteryBalance) or (100, Vault.BatteryLongLife);
+        ((Upper, BatteryMode & Vault.BatteryModeMask) is (60, Vault.BatteryStation) or (80, Vault.BatteryBalance) or (100, Vault.BatteryLongLife) ||
+         Project==Vault.VerifiedProject&&(Upper is 60 or 80)&&(BatteryMode&Vault.BatteryModeMask)==Vault.BatteryLongLife);
 }
+public sealed class AcPowerRequiredException(string message) : InvalidOperationException(message) { }
+ 
 public sealed record HardwareReceipt(string Operation, ControlState Before, ControlState After, DateTimeOffset At);
 
 // Injectable test transport. Production construction stays internal; no raw UI/IPC gateway.
 public interface IHardwareTransport : IEcTransport { bool Write(ushort address, byte value); }
-internal sealed class HardwareTransport : IHardwareTransport
-{
-    private readonly AcpiReadTransport transport = new();
-    public byte? Read(ushort address) => transport.Read(address);
-    public bool Write(ushort address, byte value) => transport.Write(address, value);
-    public void Dispose() => transport.Dispose();
-}
-
 public sealed partial class HardwareSession
 {
     private readonly Func<IHardwareTransport> open;
@@ -38,11 +33,13 @@ public sealed partial class HardwareSession
     private bool useCoreAdmission,delegatedActive;
     private readonly CoreCompatibility? fixtureAdmission;
     private CoreCompatibility Admission=>fixtureAdmission??CoreMachine.Current;
+    private bool UsesProductionClassicCore=>useCoreAdmission&&fixtureAdmission==null&&!CoreDelegated;
     public bool CoreDelegated=>useCoreAdmission&&!Admission.ClassicEc;
     public bool SupportsPerformance=>!useCoreAdmission||Admission.Performance;
     public bool SupportsBattery=>!useCoreAdmission||Admission.Battery;
     public bool SupportsFanBoost=>!useCoreAdmission||Admission.FanBoost;
-    public bool SupportsCustomTuning=>!useCoreAdmission||Admission.CustomTuning;
+    public bool SupportsCustomTuning=>!useCoreAdmission||Admission.CustomTuning||DeclaredCpuTuning!=null;
+    public bool SupportsTouchpad=>!CoreDelegated||Admission.TouchpadControl;
     public int? CurrentMode=>CoreDelegated?Admission.Mode:PerformanceState?.Mode;
     private bool MatchesProject(byte project)=>useCoreAdmission?Admission.Project==project&&project is >0 and <255:project==Vault.VerifiedProject;
     private static readonly object gate = new();
@@ -63,7 +60,7 @@ public sealed partial class HardwareSession
         {
             Guard();if(!Active||!SupportsPerformance)throw new InvalidOperationException("Core驱动未提供性能档位控制。");
             if(mode is <1 or >3)throw new ArgumentOutOfRangeException(nameof(mode));
-            if(mode==3&&!AllowBatteryPerformance&&acOnline()!=true)throw new IOException("狂暴档需要交流供电。");
+            if(mode==3&&!AllowBatteryPerformance&&acOnline()!=true)throw new AcPowerRequiredException("狂暴模式需要交流供电。请接上电源后再切换。");
             int before=CoreMachine.Refresh().Mode??throw new IOException("Core未提供当前档位。");
             audit(new{at=DateTimeOffset.Now,operation="core-mode-intent",before,target=mode});
             CoreMachine.Library.SetDeclarativeMode(before,mode);var after=CoreMachine.Refresh();
@@ -129,13 +126,13 @@ public sealed partial class HardwareSession
     {
         if(useCoreAdmission&&fixtureAdmission==null)CoreMachine.Refresh();
         if(useCoreAdmission&&!Admission.Ready)throw new InvalidOperationException(Admission.Reason);
-        if(CoreDelegated){Guard();delegatedActive=true;faulted=false;audit(new{at=DateTimeOffset.Now,operation="takeover-core-driver",admission=Admission});return null;}
+        if(CoreDelegated){Guard();delegatedActive=true;requestedFanBoost=null;faulted=false;audit(new{at=DateTimeOffset.Now,operation="takeover-core-driver",admission=Admission});return null;}
         Guard(); using var ec = open(); var state = Read(ec);
         if (!MatchesProject(state.Project)) throw new InvalidOperationException("EC 项目与Core探测结果不符，未接管。");
         audit(new { at = DateTimeOffset.Now, operation = "takeover-read-only", state });
         expected = state; faulted = false; lastBattery = null; lastPerformance = null; lastLighting = null;lastTuning=null;TuningState=null; return state;
     });
-    public void Release() { lock (gate) { expected = null;delegatedActive=false; lastBattery = null; lastPerformance = null; lastLighting = null;lastTuning=null;TuningState=null; faulted = false; } }
+    public void Release() { lock (gate) { expected = null;delegatedActive=false; requestedFanBoost=null; lastBattery = null; lastPerformance = null; lastLighting = null;lastTuning=null;TuningState=null; faulted = false; } }
     private HardwareReceipt Apply(string operation, bool battery, Func<ControlState, ControlState> target)
         => Serialized(() =>
         {
@@ -161,14 +158,28 @@ public sealed partial class HardwareSession
                 if (battery)
                 {
                     if (!before.BatteryControlAvailable) throw new InvalidOperationException("EC 未声明支持充电限制，且当前状态不符合本机普通充电档位协议。");
+                    if(UsesProductionClassicCore)
+                    {
+                        Guard();attemptedWrite=true;
+                        CoreMachine.Library.ExecuteFeature(13,new{kind="battery",project=before.Project,oldUpper=before.Upper,
+                            oldLower=before.Lower,oldMode=before.BatteryMode,upper=desired.Upper,lower=desired.Lower,mode=desired.BatteryMode});
+                    }
+                    else
+                    {
                     if (desired.Upper < before.Lower) { Write(Vault.BatteryLower, desired.Lower); Write(Vault.BatteryUpper, desired.Upper); }
                     else { Write(Vault.BatteryUpper, desired.Upper); Write(Vault.BatteryLower, desired.Lower); }
                     Write(Vault.BatteryMode, desired.BatteryMode);
+                    }
                 }
                 else
                 {
                     if ((before.Support1 & Vault.FanSupportMask) == 0) throw new InvalidOperationException("EC 未声明支持强冷。");
-                    Write(Vault.FanClamp, desired.FanClamp);
+                    if(UsesProductionClassicCore)
+                    {
+                        Guard();attemptedWrite=true;
+                        CoreMachine.Library.ExecuteFeature(13,new{kind="boost",project=before.Project,before=before.FanClamp,after=desired.FanClamp});
+                    }
+                    else Write(Vault.FanClamp, desired.FanClamp);
                 }
                 var after = Read(ec);
                 if (battery ? after.Upper != desired.Upper || after.Lower != desired.Lower || after.BatteryMode != desired.BatteryMode : after.FanClamp != desired.FanClamp)
@@ -205,3 +216,4 @@ public sealed partial class HardwareSession
         lastBattery = null; return result;
     });
 }
+

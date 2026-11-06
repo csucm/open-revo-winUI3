@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace OpenRevo.Core;
 
-public sealed record AppPreferences(int Theme = 1, int SampleSeconds = 2, bool StartMini = true, bool LowRefreshOnBattery = false, int RequestedGpu = 0, long GpuSavedAtUnix = 0,bool OsdEnabled=true,string? SelectedTuningPreset=null);
+public sealed record AppPreferences(int Theme = 1, int SampleSeconds = 2, bool StartMini = true, bool LowRefreshOnBattery = false, int RequestedGpu = 0, long GpuSavedAtUnix = 0,bool OsdEnabled=true,string? SelectedTuningPreset=null,Hal.DeclaredTuningPreset? DeclaredTuning=null);
 
 public static class AppData
 {

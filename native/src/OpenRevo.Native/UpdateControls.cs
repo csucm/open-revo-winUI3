@@ -19,7 +19,7 @@ public sealed partial class MainWindow
         updateCheckButton = Ui.Button("检查更新",async(_,_)=>await CheckNativeUpdate());
         updateInstallButton = Ui.Button("下载并安装",async(_,_)=>await DownloadNativeUpdate());
         var cancel=Ui.Button("取消下载",(_,_)=>updateCancellation?.Cancel());
-        var body=Ui.Stack(DetailRow("\uE895","软件版本与分发更新",$"本版 {typeof(App).Assembly.GetName().Version?.ToString(3)} · 社区版发布源",SettingsControls(updateCheckButton,updateInstallButton,cancel,Ui.Button("发布页",async(_,_)=>await OpenSettings(ReleaseUpdater.ReleasesPage))),1050),updateHint,Ui.Button("打开下载与安装日志",(_,_)=>{string cache=Path.Combine(AppData.DirectoryPath,"updates");Directory.CreateDirectory(cache);OpenLocalFolder(cache);}));
+        var body=Ui.Stack(DetailRow("\uE895","软件版本与分发更新",BuildInfo.UpdateDescription,SettingsControls(updateCheckButton,updateInstallButton,cancel,Ui.Button("发布页",async(_,_)=>await OpenSettings(ReleaseUpdater.ReleasesPage))),1050),updateHint,Ui.Button("打开下载与安装日志",(_,_)=>{string cache=Path.Combine(AppData.DirectoryPath,"updates");Directory.CreateDirectory(cache);OpenLocalFolder(cache);}));
         body.Spacing=4;SyncUpdateControls();var inset=DetailInset(body);inset.Padding=new Thickness(14,8,14,8);return inset;
     }
     private void SyncUpdateControls()
@@ -35,7 +35,7 @@ public sealed partial class MainWindow
         try
         {
             using var http=new HttpClient{Timeout=TimeSpan.FromSeconds(20)};
-            availableUpdate=await new ReleaseUpdater(http).CheckAsync(typeof(App).Assembly.GetName().Version??new Version(0,0,0));
+            availableUpdate=await new ReleaseUpdater(http).CheckAsync(BuildInfo.PublicReleaseVersion);
             updateMessage=availableUpdate==null?"已是最新社区版。":$"发现 {availableUpdate.Version.ToString(3)} · {availableUpdate.Size/1048576.0:F1} MiB；下载完成后将退出并自动安装。";
         }
         catch(Exception error){availableUpdate=null;updateMessage="检查失败："+error.Message;DiagnosticLog.Failure("update.check.failed",error);}

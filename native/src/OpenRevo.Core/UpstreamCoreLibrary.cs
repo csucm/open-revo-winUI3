@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -58,7 +58,17 @@ public sealed partial class UpstreamCoreLibrary : IDisposable,ICameraPowerCore,I
 
     public void Dispose()
     {
-        lock (gate) if (library != 0) { if(NativeLibrary.TryGetExport(library,"or_native_services_shutdown",out var cleanup))Marshal.GetDelegateForFunctionPointer<CameraAccess>(cleanup)(); if(NativeLibrary.TryGetExport(library,"or_native_metrics_reset",out var reset))Marshal.GetDelegateForFunctionPointer<ResetMetrics>(reset)(); NativeLibrary.Free(library); library = 0; }
+
+        lock(gate) lock(winLockGate)
+        {
+            if(library==0)return;
+            // Never unload code while its global keyboard callback can run.
+            try{NativeWinLock(false);}
+            catch(Exception error){DiagnosticLog.Failure("win-lock.dispose",error);return;}
+            if(NativeLibrary.TryGetExport(library,"or_native_services_shutdown",out var cleanup))Marshal.GetDelegateForFunctionPointer<CameraAccess>(cleanup)();
+            if(NativeLibrary.TryGetExport(library,"or_native_metrics_reset",out var reset))Marshal.GetDelegateForFunctionPointer<ResetMetrics>(reset)();
+            windowsGpu.Dispose();NativeLibrary.Free(library);library=0;
+        }
     }
     public GpuModeState ReadGpuMode()=>GpuModeState.Parse(Read(4));
     public GpuTuningState ReadGpuTuning()
@@ -142,3 +152,4 @@ public sealed partial class UpstreamCoreLibrary : IDisposable,ICameraPowerCore,I
         }
     }
 }
+

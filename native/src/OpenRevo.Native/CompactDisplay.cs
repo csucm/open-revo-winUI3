@@ -9,6 +9,7 @@ public sealed partial class MainWindow
     private bool brightnessApplying;
     private bool syncingBrightness;
     private int? requestedBrightness;
+    private int? DisplayedScreenBrightness=>requestedBrightness??screenBrightness;
     private Task? brightnessWork;
     private Func<int,Task> writeBrightness=value=>Task.Run(()=>OpenRevo.Core.ScreenBrightness.Set(value));
     private readonly Dictionary<int,Button> brightnessButtons=[];
@@ -132,7 +133,7 @@ public sealed partial class MainWindow
     {
         if(value is <10 or >100)throw new ArgumentOutOfRangeException(nameof(value));
         if(displayBusy||displayState?.Active!=true||closed)return Task.CompletedTask;
-        requestedBrightness=value;UpdateBrightnessValues();
+        requestedBrightness=value;UpdateBrightnessValues();RefreshPaintedState();
         if(brightnessWork is {IsCompleted:false})return brightnessWork;
         return brightnessWork=ApplyRequestedBrightness();
     }
@@ -159,10 +160,10 @@ public sealed partial class MainWindow
                     if(!closed)await ShowMessage("亮度未确认",error.Message);
                     break;
                 }
-                if(!closed)UpdateBrightnessValues();
+                if(!closed){UpdateBrightnessValues();RefreshPaintedState();}
             }
         }
-        finally{brightnessApplying=false;if(!closed)UpdateBrightnessValues();}
+        finally{brightnessApplying=false;if(!closed){UpdateBrightnessValues();RefreshPaintedState();}}
     }
     private void UpdateBrightnessValues()
     {

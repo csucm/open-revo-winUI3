@@ -31,7 +31,14 @@ public sealed partial class HardwareSession
 {
     public OverviewPowerTargets ProbeOverviewPowerTargets()=>Serialized(()=>
     {
-        Guard();using var ec=open();
+        Guard();
+        if(CoreDelegated)
+        {
+            var admission=CoreMachine.Refresh();
+            return new(admission.Mode??0,admission.FactoryPl1,null,null,null,
+                admission.FactoryPl1.HasValue?"PL1 目标来自原版 Core 的机型声明。":"当前模式无 Core 原厂 PL1 声明。",DateTimeOffset.Now);
+        }
+        using var ec=open();
         if(ec.Read(Vault.ProjectId) is not byte project||!MatchesProject(project))throw new IOException("EC项目不匹配，未读取原厂目标。");
         byte? custom=ec.Read(Vault.CustomMode),clamp=ec.Read(Vault.FanClamp),index=ec.Read(Vault.ModeIndex);
         int mode=custom is 64 or 65&&clamp.HasValue&&index.HasValue?(custom.Value&1)!=0?4:(clamp.Value&Vault.ModeClampMask)==160?1:(index.Value&Vault.ModeIndexMask)==16?3:2:0;

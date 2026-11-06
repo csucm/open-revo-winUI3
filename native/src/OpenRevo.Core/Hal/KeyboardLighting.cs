@@ -53,8 +53,18 @@ public sealed partial class HardwareSession
                 DiagnosticLog.Record("lighting.readback",new{field=address==Vault.RgbRed?"red":address==Vault.RgbGreen?"green":address==Vault.RgbBlue?"blue":address==Vault.Backlight?"backlight":"trigger",expected=value,actual=read,ignoredMask=ignore});
                 if (!read.HasValue || (read.Value & ~ignore) != (value & ~ignore)) throw new IOException("灯光回读失败。");
             }
+            if(UsesProductionClassicCore)
+            {
+                Guard();
+                CoreMachine.Library.ExecuteFeature(13,new{kind="lighting",project=control.Project,
+                    old_red=before.Red,old_green=before.Green,old_blue=before.Blue,old_backlight=before.Backlight,old_trigger=before.Trigger,
+                    red=after.Red,green=after.Green,blue=after.Blue,backlight=after.Backlight,trigger=after.Trigger});
+            }
+            else
+            {
             Write(Vault.RgbRed, after.Red); Write(Vault.RgbGreen, after.Green); Write(Vault.RgbBlue, after.Blue);
             Write(Vault.Backlight, after.Backlight); Write(Vault.Trigger, after.Trigger);
+            }
             var confirmed = ReadLighting(ec);
             if (!SameLighting(confirmed, after)) throw new IOException("灯光最终状态与请求不一致。");
             var result = new LightingReceipt(before, confirmed);

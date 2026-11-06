@@ -3,8 +3,6 @@
 namespace OpenRevo.Core.Hal;
 public static class Vault
 {
-    public const uint ReadIoctl = 2621482120;
-    internal const uint WriteIoctl = 2621482124;
     public const ushort ProjectId = 1856;
     public const ushort CpuFanHigh = 1124;
     public const ushort CpuFanLow = 1125;
@@ -39,6 +37,8 @@ public static class Vault
     public const byte FnLockMask=16,TouchpadMask=8;
     // Pinned Core ec_registry.json: AC recovery and power-off USB charge.
     public const ushort AcRecovery=1830;
+    // Pinned Core ec_registry.json: Q-Key white override, separate from recovery/camera.
+    public const byte ModeWhiteRecoveryMask=128,ModeWhiteCameraMask=64;
     public const byte AcRecoveryMask=8,UsbChargeMask=16;
     // Custom tuning protocol, pinned Core 4ab36ff / config/ec_registry.json.
     public const ushort CustomPl1=1923,CustomPl2=1924,CustomPl4=1925,CustomTcc=1926;

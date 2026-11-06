@@ -48,6 +48,22 @@ pub unsafe extern "C" fn or_native_query(
                 json!({"battery_percent":percent,"on_ac":ac,"charging":charging,
                     "source":"upstream GetSystemPowerStatus; upstream defaults on OS failure"})
             },
+            4 if openrevo_core::hal::declarative::load_matched_manifest().is_some() && !native_admission::classic() => {
+                let mode = openrevo_core::hal::get_hardware_driver().get_gpu_mux().ok()
+                    .filter(|mode| matches!(mode.as_str(), "igpu" | "hybrid" | "dgpu"));
+                json!({
+                    "hardware": {
+                        "hardware_read": mode.is_some(),
+                        "current_mode": mode.as_deref().unwrap_or("unknown"),
+                        "source": "Core declarative HAL"
+                    },
+                    "capabilities": {
+                        "supports_igpu_only": false,
+                        "supports_hybrid": native_admission::declared_mux_support(false),
+                        "supports_dgpu": native_admission::declared_mux_support(true)
+                    }
+                })
+            },
             4 => match openrevo_core::driver::uefi_nvram::read_active_nvram() {
                 Ok(nv) => {
                     use openrevo_core::driver::uefi_nvram as fw;
@@ -62,7 +78,8 @@ pub unsafe extern "C" fn or_native_query(
                     "capabilities":{"supports_igpu_only":false,"supports_hybrid":false,"supports_dgpu":false,"permission_required":true}}),
             },
             5 => json!({"four_zone":openrevo_core::driver::lighting::IteLightingManager::probe_four_zone_keyboard_exists(),
-                "per_key":openrevo_core::driver::ite_streamer::IteStreamerController::probe_exists()}),
+                "per_key":openrevo_core::driver::ite_streamer::IteStreamerController::probe_exists(),
+                "declared_keyboard":openrevo_core::hal::declarative::load_matched_manifest().and_then(|m|m.capabilities.rgb_keyboard)}),
             6 => json!(openrevo_core::system::model_engine::get_builtin_profiles()),
             7 => json!({"enabled":microphone_read()}),
             8 => {
@@ -100,6 +117,11 @@ pub unsafe extern "C" fn or_native_query(
                 Ok(matrix)=>json!({"read_only":true,"matrix":matrix}),
                 Err(error)=>json!({"read_only":true,"error":error})
             },
+            23 => {
+                let manifest=openrevo_core::hal::declarative::load_matched_manifest();
+                json!({"manifest":manifest.as_ref().map(|m|&m.id),"capabilities":manifest.as_ref().map(|m|&m.capabilities),"actions":manifest.as_ref().map(|m|{let mut keys:Vec<_>=m.actions.keys().cloned().collect();keys.sort();keys}),"source":"matched Core manifest; declarations are not hardware readback"})
+            },
+            24 => json!(openrevo_core::hal::get_hardware_driver().read_live_cpu_temp()),
             _ => return -1,
         };
         let bytes = value.to_string().into_bytes();
@@ -258,3 +280,6 @@ pub extern "C" fn or_native_camera_access_allow() -> i32 {
         0
     }).unwrap_or(-2)
 }
+
+
+

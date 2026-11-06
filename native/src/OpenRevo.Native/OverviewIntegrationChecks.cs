@@ -16,7 +16,13 @@ public sealed partial class MainWindow
         if(mini)ToggleMini();currentPage="overview";customTuningOpen=false;Render();root.UpdateLayout();
         var data=overviewTelemetry!;
         check("Overview CPU power uses the Core value and clearly labels its original fallback model",data.Cpu.PowerW.HasValue&&live["overviewCpuPower"].Text.Contains($"{data.Cpu.PowerW:0.0}")&&live["overviewCpuPower"].Text.Contains("估算")==data.Cpu.PowerEstimated);
-        check("VRAM displays dedicated bytes and the actual memory clock without transfer multipliers",!data.Gpu.HasMemory||live["overviewVramUsed"].Text==$"{data.Gpu.UsedGiB:0.0}"&&live["overviewVramTotal"].Text==$"/ {data.Gpu.TotalGiB:0.0} GB"&&live["overviewMemoryMhz"].Text==(data.Gpu.MemoryMhz?.ToString()??"—"));
+        double displayScale = data.Gpu.ShowsSharedMemory ? 1.073741824 : 1;
+        string memoryUnit = "GB";
+        check("GPU memory displays GB while preserving its capacity readings and actual memory clock",
+            data.Gpu.DisplayMemoryTotalGiB is not double total ||
+            live["overviewVramUsed"].Text == (data.Gpu.DisplayMemoryUsedGiB is double used ? $"{used * displayScale:0.0}" : "—") &&
+            live["overviewVramTotal"].Text == $"/ {total * displayScale:0.0} {memoryUnit}" &&
+            live["overviewMemoryMhz"].Text == (data.Gpu.MemoryMhz?.ToString() ?? "—"));
         overviewTelemetryAt=DateTimeOffset.Now.AddSeconds(-7);UpdateOverviewValues();
         check("Stale telemetry is cleared instead of retaining previous VRAM and power values",live["overviewVramUsed"].Text=="—"&&live["overviewCpuPower"].Text=="— W");
         overviewTelemetryAt=DateTimeOffset.Now;UpdateOverviewValues();

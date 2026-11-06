@@ -28,8 +28,8 @@ internal static class TrayLightweightChecks
         var invalid=new TrayTelemetrySample(clock.Now,999,double.NaN,-1,double.PositiveInfinity,true);
         string tip=invalid.ToTooltip();
         Check(!tip.Contains("999")&&!tip.Contains("NaN")&&!tip.Contains("Infinity"),"invalid values remain unknown");
-        Check(tip.Length<128&&tip.Contains("CPU 温区")&&tip.Contains("GPU"),"native tooltip limit and source label");
-        Check(new TrayTelemetrySample(DateTimeOffset.MinValue,null,null,null,null,false).ToTooltip().Contains("待采样"),"startup tooltip not invented");
+        Check(tip.Length<128&&tip.Contains("CPU ")&&tip.Contains("GPU")&&!tip.Contains("温区")&&!System.Text.RegularExpressions.Regex.IsMatch(tip,@"\d{2}:\d{2}:\d{2}"),"native tooltip length and requested concise labels");
+        Check(new TrayTelemetrySample(DateTimeOffset.MinValue,null,null,null,null,false).ToTooltip().Contains("CPU — · 占用 —"),"startup tooltip not invented");
         nint window=CreateWindowEx(0,"STATIC","isolated-icon-check",0,0,0,40,40,0,0,0,0);
         Check(window!=0,"hidden icon check window created");
         try

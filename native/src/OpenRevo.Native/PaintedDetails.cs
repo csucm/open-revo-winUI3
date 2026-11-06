@@ -18,7 +18,9 @@ public sealed partial class MainWindow
     {var copy=Paint.Stack(4,Paint.Text(title));if(description.Length>0)copy.Children.Add(Paint.Text(description,12,muted:true));return Paint.Rule(Paint.Between(copy,control,16));}
     private void RenderPaintedDetails(string route)
     {
+        if(route=="minicustomization"){RenderMiniCustomization();return;}
         if(route=="devices"){RenderPaintedLighting();return;}
+        if(route=="tuning"&&hardware.DeclaredCpuTuning is {} limits){page.Children.Add(PaintDeclaredCpuTuning(limits));return;}
         if(route=="tuning"&&tuningBaseline==null&&!tuningLoading&&!uiReviewMode)_=PaintReadTuning();
         if(route=="color"&&colorDraft==null&&serviceColor.ValueKind==JsonValueKind.Object)colorDraft=JsonNode.Parse(serviceColor.GetProperty("active_preset").GetRawText())!.AsObject();
         if(route=="updates"){RenderPaintedUpdates();return;}
@@ -44,6 +46,8 @@ public sealed partial class MainWindow
     }
     private FrameworkElement PaintDetailRow(string route,PaintRowSpec row)
     {
+        if(row.Kind=="repository")
+            return Paint.Rule(CommunityRepositoryInfo(true));
         if(row.Kind=="battery-health")return PaintBatteryHealth();
         if(row.Kind=="curves")return PaintFanCurves();
         if(row.Kind=="osd")return PaintOsdPreview();
@@ -154,11 +158,13 @@ public sealed partial class MainWindow
             case "display-2-1":PaintNavigate("color");break;case "display-2-3":if(!uiReviewMode)await ImportIcc();break;
             case "power-2-0":PaintNavigate("sleep");break;case "power-2-1":PaintNavigate("settings");break;case "power-2-3":await PaintQuickAction("screen");break;
             case "plugins-0-2":PaintNavigate("overview");break;
+            case "settings-0-5":PaintNavigate("minicustomization");break;
             case "settings-0-3":PaintNavigate("osdsettings");break;case "settings-3-0":PaintNavigate("storage");break;case "settings-3-1":PaintNavigate("diagnostics");break;
             case "settings-2-1":await PaintReadPlans();break;case "settings-2-2":await PaintRecoverPlans();break;
             case "settings-3-2":TrayMenu();break;case "settings-3-3":if(!uiReviewMode)await ExitFromTray();break;
             case "storage-0-1":if(!uiReviewMode)OpenLocalFolder(AppData.DirectoryPath);break;case "storage-0-2":await MigrateDataStorage();break;case "storage-1-0":await ClearDataStorage();break;
             case "diagnostics-0-1":case "diagnostics-1-2":if(!uiReviewMode)OpenLocalFolder(AppData.DiagnosticsPath);break;case "diagnostics-0-2":if(!uiReviewMode)await Export();break;
+            case "diagnostics-0-3":await SubmitBugReport();break;
             case "diagnostics-1-3":await SaveSystemSettings(systemPreferences with{LogLevel=0});await ConfigureDebugLog();debugSettingsHidden=true;Render();break;
             case "osdsettings-1-1":PaintOsdReplay();break;
             case "tuning-0-2":await PaintReadTuning();break;
@@ -176,7 +182,7 @@ public sealed partial class MainWindow
     private (double? Value,double? Min,double? Max,double Step,string Unit,bool Enabled) PaintRangeBinding(string id)
     {
         var p=tuningDraft;var caps=tuningBaseline?.Gpu.Capabilities;
-        if(id=="display-1-0")return(screenBrightness,10,100,1,"%",displayState?.Active==true&&!displayBusy);
+        if(id=="display-1-0")return(DisplayedScreenBrightness,10,100,1,"%",displayState?.Active==true&&!displayBusy);
         if(id.StartsWith("color")){string key=PaintColorKey(id);double min=id=="color-1-0"?4000:id=="color-1-1"?0:id=="color-2-1"?.7:.5,max=id=="color-1-0"?9000:id=="color-1-1"?2:id=="color-2-1"?1.3:1.5;return(colorDraft?[key]?.GetValue<double>(),min,max,id=="color-1-0"?50:.02,id=="color-1-0"?"K":"",serviceColor.ValueKind==JsonValueKind.Object&&!colorServicesBusy);}
         if(id.StartsWith("lightingzone")){bool speed=id=="lightingzone-1-1";return(PaintZoneNumber(speed?"speed":"brightness"),0,4,1,"档",JsonBool(serviceLighting,selectedLightingZone)&&hardware.Active&&!zoneServicesBusy&&(!speed||selectedLightingZone!="logo"&&!(selectedLightingZone=="front"&&JsonBool(serviceLighting,"ec_front"))));}
         return id switch
@@ -194,15 +200,38 @@ public sealed partial class MainWindow
         if(id.StartsWith("lightingzone"))await PaintSetZone(id=="lightingzone-1-1"?"speed":"brightness",JsonValue.Create((int)value)!);
     }
     private void PaintDraftChanged(){RememberPresetDraft();tuningStatus="草稿已修改，尚未应用。";}
+    private bool PaintIntegratedOnly => !uiReviewMode && CoreMachine.Current.IntegratedOnly;
+
+    private FrameworkElement PaintGpuAvailability(FrameworkElement modes)
+    {
+        var integrated=Paint.Inline(8,Paint.Icon("gpu-integrated",24),
+            Paint.Stack(3,PT(() => IntegratedGpuModel ?? "集成显卡"),Paint.Text("此机型不支持三模切换",12,muted:true)));
+        void Update()
+        {
+            bool integratedOnly=PaintIntegratedOnly;
+            modes.Visibility=integratedOnly?Visibility.Collapsed:Visibility.Visible;
+            integrated.Visibility=integratedOnly?Visibility.Visible:Visibility.Collapsed;
+        }
+        Update();
+        paintBindings.Add(Update);
+        return Paint.Stack(0,modes,integrated);
+    }
+
     private FrameworkElement PaintGpuDetails()
     {
         var grid=new DesktopTiles{PreferredColumns=3,MinimumItemWidth=0,SingleColumnBelow=460,ColumnSpacing=10,RowSpacing=10};foreach(var definition in originalGpuModes.OrderBy(m=>m.Mode)){int mode=definition.Mode;var b=PB(definition.Title,()=>RunGpuRequest(mode),true);var icon=Paint.Icon(mode==1?"gpu-integrated":mode==2?"gpu-hybrid":"gpu-discrete");icon.HorizontalAlignment=HorizontalAlignment.Center;var name=Paint.Text(definition.Title);name.TextAlignment=TextAlignment.Center;var desc=Paint.Text(definition.Description,12,muted:true);desc.TextAlignment=TextAlignment.Center;b.Content=Paint.Stack(8,icon,name,desc);b.Padding=new(16);b.HorizontalAlignment=HorizontalAlignment.Stretch;b.StretchContent();paintBindings.Add(()=>{b.Selected=gpuState?.Mode==mode;b.IsEnabled=hardware.Active&&gpuReadFresh&&!gpuChanging&&gpuState?.Supports(mode)==true;});grid.Children.Add(b);}
-        return Paint.Stack(14,grid,Paint.Between(PT(()=>"当前运行："+OriginalGpuName(GpuRuntimeMode)+(GpuRestartPending?" · 目标："+OriginalGpuName(gpuState?.Mode??0)+" · 待重启":""),12,muted:true),PB("刷新状态",()=>RunGpuRequest(0),true)));
+        return PaintGpuAvailability(Paint.Stack(14,grid,Paint.Between(PT(()=>UsesDeclaredGpuMux?"Core 读取模式："+OriginalGpuName(gpuState?.Mode??0):"当前运行："+OriginalGpuName(GpuRuntimeMode)+(GpuRestartPending?" · 目标："+OriginalGpuName(gpuState?.Mode??0)+" · 待重启":""),12,muted:true),PB("刷新状态",()=>RunGpuRequest(0),true))));
     }
     private FrameworkElement PaintBatteryHealth()
     {
-        var choices=Paint.Stack(8);foreach(var(name,desc,limit)in new[]{("长效模式","经常使用电池",100),("平衡模式","兼顾便携与桌面",80),("工作站模式","长期连接适配器",60)}){var b=PB(name,()=>RunHardware(()=>hardware.SetBatteryPreset(limit),"充电上限已回读确认。"),true);b.Content=Paint.Between(Paint.Stack(4,Paint.Text(name),Paint.Text(desc,12,muted:true)),Paint.Text(limit+"%"));b.Padding=new(12);b.StretchContent();paintBindings.Add(()=>{b.Selected=hardware.State?.Upper==limit;b.IsEnabled=hardware.Active&&hardware.SupportsBattery&&!hardwareBusy;});choices.Children.Add(b);}
-        var battery=PaintBatteryPicture(220);battery.Width=double.NaN;battery.MaxWidth=220;var copy=Paint.Stack(6,Paint.Text("剩余电量",12,muted:true),Paint.Inline(3,PT(()=>latest?.BatteryPercent?.ToString()??"—",24),Paint.Text("%")),PT(()=>latest?.OnAc==true?"已连接电源":latest?.OnAc==false?"正在使用电池":"供电状态未知",12,muted:true),PT(()=>hardware.State?.Upper is byte n?"充电上限 "+n+"%":"充电上限 —",12,muted:true));var status=new Grid{ColumnSpacing=24,Padding=new(16),VerticalAlignment=VerticalAlignment.Center};status.ColumnDefinitions.Add(new(){Width=new(1,GridUnitType.Star),MaxWidth=220});status.ColumnDefinitions.Add(new(){Width=GridLength.Auto,MinWidth=120});status.Children.Add(battery);Grid.SetColumn(copy,1);status.Children.Add(copy);return new ApprovedBatteryLayout(choices,status);
+        var choices=Paint.Stack(8);foreach(var(name,desc,limit)in new[]{("长效模式","经常使用电池",100),("平衡模式","兼顾便携与桌面",80),("工作站模式","长期连接适配器",60)}){var b=PB(name,()=>RunHardware(()=>hardware.ApplyBatteryCommand(limit),hardware.CoreDelegated?"Core 已发送充电上限命令。":"充电上限已回读确认。"),true);b.Content=Paint.Between(Paint.Stack(4,Paint.Text(name),Paint.Text(desc,12,muted:true)),Paint.Text(limit+"%"));b.Padding=new(12);b.StretchContent();paintBindings.Add(()=>{b.Selected=hardware.State?.Upper==limit;b.IsEnabled=hardware.Active&&hardware.SupportsBattery&&!hardwareBusy;});choices.Children.Add(b);}
+        BindCapability(choices,()=>hardware.SupportsBattery);
+        var battery=PaintBatteryPicture(220);battery.Width=double.NaN;battery.MaxWidth=220;battery.HorizontalAlignment=HorizontalAlignment.Center;
+        var amount=Paint.Inline(3,PT(()=>latest?.BatteryPercent?.ToString()??"—",24),Paint.Text("%"));amount.HorizontalAlignment=HorizontalAlignment.Center;
+        var copy=Paint.Stack(6,Paint.Text("剩余电量",12,muted:true),amount,PT(()=>latest?.OnAc==true?"已连接电源":latest?.OnAc==false?"正在使用电池":"供电状态未知",12,muted:true),PT(()=>!ShowDeclaredControl(hardware.SupportsBattery)?"":hardware.State?.Upper is byte n?"充电上限 "+n+"%":"充电上限 —",12,muted:true));
+        foreach(var text in copy.Children.OfType<TextBlock>())text.TextAlignment=TextAlignment.Center;
+        var status=Paint.Stack(12,battery,copy);status.Padding=new(16);status.VerticalAlignment=VerticalAlignment.Center;
+        return new ApprovedBatteryLayout(choices,status);
     }
     private double PaintMiniHeight(double width)
     {
@@ -211,3 +240,5 @@ public sealed partial class MainWindow
         return Math.Ceiling(page.DesiredSize.Height+32+8);
     }
 }
+
+

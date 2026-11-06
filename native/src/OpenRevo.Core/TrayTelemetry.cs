@@ -8,8 +8,7 @@ public sealed record TrayTelemetrySample(DateTimeOffset At, int? CpuTemperature,
     {
         static string Temp(int? n) => n is > 0 and < 125 ? n.Value.ToString(CultureInfo.InvariantCulture) + "°C" : "—";
         static string Usage(double? n) => n is >= 0 and <= 100 && double.IsFinite(n.Value) ? n.Value.ToString("0.#", CultureInfo.InvariantCulture) + "%" : "—";
-        string stamp=At==DateTimeOffset.MinValue?"待采样":At.ToLocalTime().ToString("HH:mm:ss",CultureInfo.InvariantCulture);
-        return $"Open-Revo · {stamp}\nCPU 温区 {Temp(CpuTemperature)} · 占用 {Usage(CpuUsage)}\nGPU {Temp(GpuReadAllowed?GpuTemperature:null)} · 占用 {Usage(GpuReadAllowed?GpuUsage:null)}" + (GpuReadAllowed ? "" : "（节能限制/未读取）");
+        return $"Open-Revo\nCPU {Temp(CpuTemperature)} · 占用 {Usage(CpuUsage)}\nGPU {Temp(GpuReadAllowed?GpuTemperature:null)} · 占用 {Usage(GpuReadAllowed?GpuUsage:null)}" + (GpuReadAllowed ? "" : "（节能限制/未读取）");
     }
 }
 

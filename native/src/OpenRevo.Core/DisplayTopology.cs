@@ -1,9 +1,23 @@
 using System.Runtime.InteropServices;
 namespace OpenRevo.Core;
 
-public sealed record InternalDisplayCandidate(string DeviceName,string Panel,string Name,string Adapter,int Technology,bool Active,bool Available,bool SharedSource=false);
+public sealed record InternalDisplayCandidate(string DeviceName,string Panel,string Name,string Adapter,int Technology,bool Active,bool Available,bool SharedSource=false)
+{
+    public string? SourceAdapterLuid { get; init; }
+    public string? TargetAdapterLuid { get; init; }
+}
 public static class DisplayTopology
 {
+    private static int gpuGeneration;
+    public static int GpuGeneration => Volatile.Read(ref gpuGeneration);
+    public static void InvalidateGpuIdentity() => Interlocked.Increment(ref gpuGeneration);
+    internal static string AdapterKey(uint low, int high) => $"luid_0x{high:X8}_0x{low:X8}";
+    internal static (string? Path, int Status) AdapterDevicePath(uint low, int high)
+    {
+        var packet = new AdapterName { Header = new() { Type = 4, Size = 276, Adapter = new() { Low = low, High = high } }, Path = "" };
+        int status = GetAdapterName(ref packet);
+        return (status == 0 ? packet.Path : null, status);
+    }
     public static object? LastSnapshot{get;private set;}
     private static InternalDisplayCandidate[] lastCandidates=[];
     public static bool IsInternalTechnology(int technology)=>technology is 6 or 11 or 13 or int.MinValue;
@@ -50,7 +64,11 @@ public static class DisplayTopology
                 DiagnosticLog.Record("display.path",new{sourceResult,targetResult,device=source.Name,technology=path.Target.Technology,active=(path.Flags&1)!=0,available=path.Target.Available!=0,panel=PanelCode(target.Path),name=target.Name});
                 if(sourceResult!=0||targetResult!=0)continue;
                 bool shared=paths.Take((int)count).Count(p=>p.Source.Adapter.Low==path.Source.Adapter.Low&&p.Source.Adapter.High==path.Source.Adapter.High&&p.Source.Id==path.Source.Id)>1;
-                list.Add(new(source.Name,PanelCode(target.Path),target.Name,DisplayControl.AdapterDescription(source.Name),path.Target.Technology,(path.Flags&1)!=0,path.Target.Available!=0,shared));
+                list.Add(new(source.Name,PanelCode(target.Path),target.Name,DisplayControl.AdapterDescription(source.Name),path.Target.Technology,(path.Flags&1)!=0,path.Target.Available!=0,shared)
+                {
+                    SourceAdapterLuid = AdapterKey(path.Source.Adapter.Low, path.Source.Adapter.High),
+                    TargetAdapterLuid = AdapterKey(path.Target.Adapter.Low, path.Target.Adapter.High)
+                });
             }
             lastCandidates=list.ToArray();LastSnapshot=new{at=DateTimeOffset.UtcNow,result,candidates=lastCandidates};
             var selected=Select(list);trace.Complete(new{selected,candidates=list});return selected;
@@ -65,8 +83,10 @@ public static class DisplayTopology
     [StructLayout(LayoutKind.Sequential)]private struct Header{public uint Type,Size;public Luid Adapter;public uint Id;}
     [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]private struct SourceName{public Header Header;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=32)]public string Name;}
     [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]private struct TargetName{public Header Header;public uint Flags;public int Technology;public ushort Manufacturer,Product;public uint Connector;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=64)]public string Name;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=128)]public string Path;}
+    [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)]private struct AdapterName{public Header Header;[MarshalAs(UnmanagedType.ByValTStr,SizeConst=128)]public string Path;}
     [DllImport("user32.dll")]private static extern int GetDisplayConfigBufferSizes(uint flags,out uint paths,out uint modes);
     [DllImport("user32.dll")]private static extern int QueryDisplayConfig(uint flags,ref uint pathCount,[Out]PathInfo[] paths,ref uint modeCount,[Out]byte[] modes,nint topology);
     [DllImport("user32.dll",EntryPoint="DisplayConfigGetDeviceInfo",CharSet=CharSet.Unicode)]private static extern int GetSourceName(ref SourceName packet);
     [DllImport("user32.dll",EntryPoint="DisplayConfigGetDeviceInfo",CharSet=CharSet.Unicode)]private static extern int GetTargetName(ref TargetName packet);
+    [DllImport("user32.dll",EntryPoint="DisplayConfigGetDeviceInfo",ExactSpelling=true)]private static extern int GetAdapterName(ref AdapterName packet);
 }

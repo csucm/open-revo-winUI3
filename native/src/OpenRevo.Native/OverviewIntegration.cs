@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenRevo.Core;
+using OpenRevo.Core.Hal;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
@@ -21,25 +22,34 @@ public sealed partial class MainWindow
     private void SampleOverviewIntegration()
     {
         bool active=!mini&&currentPage=="overview"&&IsVisibleNow()&&upstream!=null&&!gpuChanging;
+        bool readSwitches=IsVisibleNow()&&upstream!=null&&!gpuChanging&&
+            (active||mini||currentPage is "devices" or "minicustomization");
         if(overviewTelemetryRead is {IsCompleted:true})
         {
-            overviewTelemetry=active&&overviewTelemetryRead.IsCompletedSuccessfully?overviewTelemetryRead.Result:null;
-            overviewTelemetryAt=lastOverviewTelemetry;overviewTelemetryRead=null;UpdateOverviewValues();
+            if(overviewTelemetryRead.IsCompletedSuccessfully){overviewTelemetry=overviewTelemetryRead.Result;overviewTelemetryAt=lastOverviewTelemetry;}
+            else if(overviewTelemetryRead.Exception is {} error)DiagnosticLog.Failure("overview.telemetry.read",error,throttle:true);
+            overviewTelemetryRead=null;UpdateOverviewValues();
         }
         if(extraSwitchRead is {IsCompleted:true})
         {
-            if(extraReadGeneration==extraGeneration&&extraSwitchBusy.Count==0)extraSwitches=extraSwitchRead.IsCompletedSuccessfully?extraSwitchRead.Result:new(null,null,null,null);
+            if(extraReadGeneration==extraGeneration&&extraSwitchBusy.Count==0)
+            {
+                extraSwitches=extraSwitchRead.IsCompletedSuccessfully?extraSwitchRead.Result:new(null,null,null,null);
+                UpdateMonochromeReadback(extraSwitches);
+            }
             extraSwitchRead=null;UpdateExtraSwitchButtons();
         }
+        if(readSwitches&&extraSwitchRead==null&&extraSwitchBusy.Count==0&&!quickBusy&&!hardwareBusy&&!monochromeBusy&&DateTimeOffset.Now-lastExtraSwitchRead>=TimeSpan.FromSeconds(6))
+        {lastExtraSwitchRead=DateTimeOffset.Now;extraReadGeneration=extraGeneration;extraSwitchRead=Task.Run(()=>upstream!.ReadOverviewSwitches());}
         if(!active)return;
         SampleOverviewPowerTargets();
         if(overviewTelemetryRead==null&&DateTimeOffset.Now-lastOverviewTelemetry>=TimeSpan.FromSeconds(2))
         {
-            lastOverviewTelemetry=DateTimeOffset.Now;bool gpu=latest?.OnAc==true&&ec.GpuFan is >0;
-            overviewTelemetryRead=Task.Run(()=>upstream!.ReadOverviewTelemetry(gpu));
+            lastOverviewTelemetry=DateTimeOffset.Now;
+            bool? discreteDeclared = CoreMachine.Current.DiscreteGpuDeclared;
+            bool gpu = discreteDeclared == false || latest?.OnAc == true && ec.GpuFan is >0;
+            overviewTelemetryRead=Task.Run(()=>upstream!.ReadOverviewTelemetry(gpu, discreteDeclared));
         }
-        if(extraSwitchRead==null&&extraSwitchBusy.Count==0&&!quickBusy&&!hardwareBusy&&DateTimeOffset.Now-lastExtraSwitchRead>=TimeSpan.FromSeconds(6))
-        {lastExtraSwitchRead=DateTimeOffset.Now;extraReadGeneration=extraGeneration;extraSwitchRead=Task.Run(()=>upstream!.ReadOverviewSwitches());}
         UpdateOverviewValues();
     }
     private Button ExtraSwitchButton(string key,string title,string glyph)
@@ -64,7 +74,7 @@ public sealed partial class MainWindow
         {
             bool? state=key=="osd"?osdEnabled:extraSwitches.Get(ExtraSwitchKind(key));
             bool busy=extraSwitchBusy.Contains(key);
-            button.IsEnabled=!busy&&(key=="osd"||upstream!=null&&state.HasValue&&(key is not("fn" or "touchpad")||hardware.Active));
+            button.IsEnabled=!busy&&(key!="touchpad"||hardware.SupportsTouchpad)&&(key=="osd"||upstream!=null&&state.HasValue&&(key is not("fn" or "touchpad")||hardware.Active));
             if(!mini)UpdateApprovedQuickButton(button,key,state,busy);else SetChoiceVisual(button,state==true);
             if(button.Content is StackPanel body)
             {
@@ -154,3 +164,4 @@ public sealed partial class MainWindow
         foreach(var(feature,state)in new[]{(6u,quickState.Camera),(7u,quickState.Microphone),(8u,quickState.WinLocked),(10u,(bool?)(sessionPower?.Enabled==true))})if(state.HasValue)ObserveOsd(feature,state.Value?1u:0u);
     }
 }
+

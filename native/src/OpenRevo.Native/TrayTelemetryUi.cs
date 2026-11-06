@@ -26,7 +26,7 @@ public sealed partial class MainWindow
             bool tempFresh=temperatureTask==null&&cachedTemperature.Cpu!=null&&DateTimeOffset.Now-lastTemperature<TimeSpan.FromSeconds(4);
             DateTimeOffset tempAt=lastTemperature;
             var cachedGpu=overviewTelemetry;
-            bool gpuFresh=cachedGpu?.GpuSampled==true&&DateTimeOffset.Now-overviewTelemetryAt<TimeSpan.FromSeconds(4);
+            bool gpuFresh=cachedGpu?.GpuSampled==true&&cachedGpu.TopologyGeneration==DisplayTopology.GpuGeneration&&DateTimeOffset.Now-overviewTelemetryAt<TimeSpan.FromSeconds(4);
             DateTimeOffset gpuAt=overviewTelemetryAt;
             trayHoverRead=trayTelemetry.RequestAsync(()=>Task.Run(async()=>
             {
@@ -34,10 +34,12 @@ public sealed partial class MainWindow
                 if(!cpuFresh)trayCpu.ReadCpuPercent();
                 var fans=savedEc;
                 if(readEc&&!freshEc){try{fans=pendingEc!=null?await pendingEc:EcReader.Read(identity);}catch{fans=new(null,null,null,null,"不可用");}}
-                bool readGpu=readEc&&Telemetry.ReadAc()==true&&fans.GpuFan is >0&&core!=null;
+                bool? discreteDeclared = core != null ? CoreMachine.Current.DiscreteGpuDeclared : null;
+                bool readGpu = core != null && (discreteDeclared == false || readEc && Telemetry.ReadAc() == true && fans.GpuFan is >0);
                 var temps=tempFresh?cachedTemperature:temperatures.Read(false);
                 OverviewTelemetry? detail=null;
-                if(readGpu) { try { detail=gpuFresh?cachedGpu:core!.ReadOverviewTelemetry(true); } catch { } }
+                if(readGpu) { try { detail=gpuFresh?cachedGpu:core!.ReadOverviewTelemetry(true, discreteDeclared); } catch { } }
+                if (detail?.TopologyGeneration != DisplayTopology.GpuGeneration) detail = null;
                 if(!cpuFresh)await Task.Delay(350);
                 var at=cpuFresh?cachedCpu!.At:DateTimeOffset.UtcNow;
                 if(tempFresh&&tempAt<at)at=tempAt;

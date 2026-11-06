@@ -7,10 +7,11 @@ public sealed class AutomaticRefresh
     private bool wasEnabled;
     private int? restoreRate;
     public bool Pending { get; private set; }
+    public bool NeedsEvaluationWhenDisabled => wasEnabled || Pending;
     public void Evaluate(bool enabled, bool? onAc, Func<DisplayState> read, Action<int, int> change)
     {
         if (!onAc.HasValue) return;
-        if (!enabled && !wasEnabled && !Pending) return;
+        if (!enabled && !NeedsEvaluationWhenDisabled) return;
         if (enabled && wasEnabled && appliedAc == onAc && !Pending) return;
         var state = read();
         if (!state.Active || state.DeviceName.Length == 0 || state.Rates.Length == 0) { Pending = true; wasEnabled = enabled; return; }

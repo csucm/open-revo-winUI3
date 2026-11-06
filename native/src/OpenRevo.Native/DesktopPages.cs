@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenRevo.Core;
 
@@ -25,7 +25,7 @@ public sealed partial class MainWindow
         var choices=new List<FrameworkElement>();
         foreach(var(title,description,limit)in new[]{("长效模式","经常使用电池",100),("平衡模式","兼顾便携与桌面",80),("工作站模式","长期连接适配器",60)})
         {
-            var button=Ui.Button(title,async(_,_)=>{if(hardware.Active)await RunHardware(()=>hardware.SetBatteryPreset(limit),"充电上限已回读确认；已有电量不会主动下降。");});
+            var button=Ui.Button(title,async(_,_)=>{if(hardware.Active)await RunHardware(()=>hardware.ApplyBatteryCommand(limit),hardware.CoreDelegated?"Core 已发送充电上限命令。":"充电上限已回读确认；已有电量不会主动下降。");});
             var labels=SuiteVisuals.Stack(4,Ui.Text(title,14),Ui.Text(description,12,muted:true));button.Content=Ui.Row(labels,Ui.Text(limit+"%",14));button.Tag="detail-choice";button.Padding=new Thickness(12);button.MinHeight=0;button.HorizontalAlignment=HorizontalAlignment.Stretch;button.HorizontalContentAlignment=HorizontalAlignment.Stretch;
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button,$"{title}，充电上限 {limit}%");ToolTipService.SetToolTip(button,description);
             button.IsEnabled=hardware.Active&&!hardwareBusy&&hardware.SupportsBattery;compactChargeButtons[limit]=button;choices.Add(button);
@@ -84,3 +84,4 @@ public sealed partial class MainWindow
         SyncZoneServices();
     }
 }
+

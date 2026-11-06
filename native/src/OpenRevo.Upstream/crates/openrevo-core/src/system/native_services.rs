@@ -69,7 +69,14 @@ pub fn execute(action:u32,v:Value)->Result<(),String> {
             let on=v["enabled"].as_bool().ok_or("缺少开关")?;
             if ec::wmi_read_ec(addr)!=Some(expected){return Err("硬件状态已变化，请重读".into());}
             let desired=if on{expected|mask}else{expected&!mask};
-            if ec::wmi_modify_ec_mask(addr,mask,on)!=Some(desired)||ec::wmi_read_ec(addr)!=Some(desired){return Err("供电设置回读未确认".into());}Ok(())
+            // Compare under the same ACPI lock as the masked write. A change
+            // between the earlier read and this RMW must not send a command.
+            let mut changed=false;
+            let written=ec::wmi_modify_ec(addr,|current|{
+                if current!=expected{changed=true;current}else{desired}
+            });
+            if changed{return Err("硬件状态已变化，未写入，请重读".into());}
+            if written!=Some(desired)||ec::wmi_read_ec(addr)!=Some(desired){return Err("供电设置回读未确认".into());}Ok(())
         },
         3=>crate::system::power::apply_native_windows_overlay(v["mode"].as_u64().filter(|n|(1..=4).contains(n)).ok_or("无效档位")? as u8),
         4=>{
@@ -106,8 +113,12 @@ pub fn execute(action:u32,v:Value)->Result<(),String> {
                 _=>return Err("不支持的灯区".into())
             };
             if !ok{return Err("Core未确认灯区指令成功".into());}
-            std::fs::create_dir_all(data_dir()).map_err(|e|e.to_string())?;
-            std::fs::write(data_dir().join("lighting.json"),serde_json::to_vec_pretty(&state).map_err(|e|e.to_string())?).map_err(|e|e.to_string())
+            let persisted=(||{
+                std::fs::create_dir_all(data_dir()).map_err(|e|e.to_string())?;
+                let bytes=serde_json::to_vec_pretty(&state).map_err(|e|e.to_string())?;
+                crate::system::config_io::atomic_write(&data_dir().join("lighting.json"),&bytes)
+            })();
+            persisted.map_err(|error|format!("灯区指令已确认发送，但设置保存失败：{}",error))
         },
         7=>{
             use crate::system::display_tuning as tuning;

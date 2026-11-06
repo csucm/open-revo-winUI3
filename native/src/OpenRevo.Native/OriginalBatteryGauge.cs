@@ -52,7 +52,6 @@ internal sealed class ApprovedBatteryLayout:Panel
 {
     private readonly FrameworkElement presets,gauge;
     private readonly Border divider;
-    private bool narrow;
     internal ApprovedBatteryLayout(FrameworkElement presets,FrameworkElement gauge)
     {
         this.presets=presets;this.gauge=gauge;
@@ -61,13 +60,12 @@ internal sealed class ApprovedBatteryLayout:Panel
     }
     protected override Windows.Foundation.Size MeasureOverride(Windows.Foundation.Size available)
     {
-        double width=double.IsFinite(available.Width)?available.Width:800;narrow=XamlRoot?.Size.Width<=960;
-        double column=narrow?width:Math.Max(0,(width-16)/2);presets.Measure(new(column,double.PositiveInfinity));gauge.Measure(new(column,double.PositiveInfinity));divider.Measure(new(1,1));
-        return new(width,narrow?presets.DesiredSize.Height+16+gauge.DesiredSize.Height:Math.Max(presets.DesiredSize.Height,gauge.DesiredSize.Height));
+        double width=double.IsFinite(available.Width)?available.Width:800;
+        double column=Math.Max(0,(width-16)/2);presets.Measure(new(column,double.PositiveInfinity));gauge.Measure(new(column,double.PositiveInfinity));divider.Measure(new(1,1));
+        return new(width,Math.Max(presets.DesiredSize.Height,gauge.DesiredSize.Height));
     }
     protected override Windows.Foundation.Size ArrangeOverride(Windows.Foundation.Size final)
     {
-        if(narrow){presets.Arrange(new(0,0,final.Width,presets.DesiredSize.Height));gauge.Arrange(new(0,presets.DesiredSize.Height+16,final.Width,gauge.DesiredSize.Height));divider.Arrange(new(0,0,0,0));}
-        else {double column=Math.Max(0,(final.Width-16)/2);presets.Arrange(new(0,0,column,final.Height));gauge.Arrange(new(column+16,0,column,final.Height));divider.Arrange(new(column+7.5,0,1,final.Height));}return final;
+        double column=Math.Max(0,(final.Width-16)/2);presets.Arrange(new(0,0,column,final.Height));gauge.Arrange(new(column+16,0,column,final.Height));divider.Arrange(new(column+7.5,0,1,final.Height));return final;
     }
 }

@@ -83,7 +83,7 @@ public sealed partial class MainWindow
         }
         if(currentPage=="diagnostics")
         {
-            page.Children.Add(DetailSection("诊断报告",SuiteVisuals.Stack(0,SuiteSettingRow("导出范围","设备、能力、状态、配置摘要与脱敏日志。",Ui.Text("脱敏导出",12,muted:true)),SuiteSettingRow("打开默认目录","",Ui.Button("打开目录",(_,_)=>OpenLocalFolder(AppData.DiagnosticsPath))),SuiteSettingRow("选择位置并导出","取消不会留下不完整文件。",Ui.Button("导出",async(_,_)=>await Export())))));
+            page.Children.Add(DetailSection("诊断报告",SuiteVisuals.Stack(0,SuiteSettingRow("导出范围","设备、能力、状态、配置摘要与脱敏日志。",Ui.Text("脱敏导出",12,muted:true)),SuiteSettingRow("打开默认目录","",Ui.Button("打开目录",(_,_)=>OpenLocalFolder(AppData.DiagnosticsPath))),SuiteSettingRow("选择位置并导出","取消不会留下不完整文件。",Ui.Button("导出",async(_,_)=>await Export())),SuiteSettingRow("提交 Bug","在 GitHub 填写问题并上传日志文件。",Ui.Button("提交 Bug",async(_,_)=>await SubmitBugReport())))));
             if(debugSettingsVisible&&!debugSettingsHidden){var extra=Ui.Stack();RenderDebugSettings(extra,Choice,Switch);var items=extra.Children.ToArray();extra.Children.Clear();foreach(var item in items)page.Children.Add(item);}return;
         }
         Add("\uE790","应用主题","保存到本机；重新启动和托盘唤醒后保持所选主题。",Choice("应用主题",["跟随 Windows","浅色","深色"],selectedTheme,ChangeApplicationTheme,180));
@@ -142,7 +142,7 @@ public sealed partial class MainWindow
         var trayButton=Ui.Button("查看菜单",(_,_)=>TrayMenu());var exit=Ui.Button("退出",async(_,_)=>await ExitFromTray());
         var data=SuiteVisuals.Stack(0,SubpageLink("storage","数据存储管理","打开目录、迁移与清除"),SubpageLink("diagnostics","诊断与日志","导出诊断、额外调试日志"),SuiteSettingRow("后台与托盘","关闭窗口后继续运行。",trayButton),SuiteSettingRow("退出程序","退出后释放防休眠状态。",exit));
         page.Children.Add(DetailGrid(DetailSection("外观与面板",appearance),DetailSection("运行与设备",runtime),DetailSection("Windows 基础电源方案",plans),DetailSection("数据与诊断",data)));
-        page.Children.Add(DetailSection("关于 Open-Revo",SuiteSettingRow("开源许可","基于 faintonce/open-revo / openrevo-core",Ui.Text("GPL-3.0-or-later",12,muted:true))));
+        page.Children.Add(DetailSection("关于 Open-Revo",Ui.Stack(CommunityRepositoryInfo(),SuiteSettingRow("开源许可","基于 faintonce/open-revo / openrevo-core",Ui.Text("GPL-3.0-or-later",12,muted:true)))));
     }
 
     private static void OpenLocalFolder(string directory)
