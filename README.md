@@ -15,6 +15,12 @@ Windows x64 · WinUI 3 社区预发布版
 
 共享 .NET 10 x64 Desktop Runtime 与 Windows App Runtime；安装器保留运行时检测及引导。GPL-3.0-or-later 社区移植版，保留上游版权。插件仍在开发中。
 
+## 构建、维护与旧工程
+
+当前源码入口为 `native/`，参见 [构建说明](BUILDING.md)、[维护与归档映射](MAINTENANCE.md)、[协作规则](AGENTS.md) 和 [文档导航](docs/README.md)。
+
+原 Tauri/Web 工程及网页插件样例已完整保存在 [archive-tauri-web-20261107](https://github.com/csucm/open-revo-winUI3/tree/archive-tauri-web-20261107)。主分支保留当前 C# 界面、适配 Rust Core/桥接及安装器；不再使用根 Node/pnpm 入口或旧 Tauri/Gitee 自动流程。当前 Native 源文件和已发布 0.6.9 附件没有因这次整理改变。
+
 ## 0.6.8 界面介绍与历史截图
 
 下方保留 0.6.8 的界面说明和当时的截图，当前变化以 [0.6.9 更新日志](docs/releases/0.6.9.md) 为准。

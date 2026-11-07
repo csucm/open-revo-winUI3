@@ -1,59 +1,49 @@
-# OS / Editor
+# OS and editor files
 Thumbs.db
 ehthumbs.db
 .DS_Store
-.DS_Store?
 ._*
+.idea/
+.vs/
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
-.idea/
 *.suo
-*.sln
-*.sw?
+*.user
+*.swp
 
-# Build outputs & dependencies
-build/
-dist/
-dist-ssr/
-out/
+# Current Native build outputs and dependency caches
+**/bin/
+**/bin-*/
+**/obj/
+**/target/
+native/app-*/
+native/core-proof/
+native/evidence/
+native/src/**/Generated Files/
+native/installer/FolderFilter.obj
+native/installer/FolderFilter.lib
+native/installer/FolderFilter.exp
+native/native-source-*.zip
+native/native-source-*.zip.sha256
+/Open-Revo-*-Setup-x64.exe
+/Open-Revo-*-Setup-x64.exe.sha256
 node_modules/
-target/
-src-tauri/target/
-**/[Oo]bj/
-**/[Bb]in/Debug/
 
-# Local env & logs
+# Local data, environment and temporary outputs
 .env
 .env.*
 *.log
-!update.log
-
-# Temporary files & archives
+*.pdb
 *.tmp
 *.bak
-*.swp
-*.pdb
-*.exe
-!plugins_sample/**/*.exe
 *.7z
-*.zip
 *.reg
-
-# Generated artifacts & releases
-dist_release/
-coverage/
-src-tauri/gen/schemas/
-vite.config.ts.timestamp-*.mjs
-
-# Private & Reverse Engineering Assets Boundary
-decompiled/
-probe_scripts/
+**/data/
+**/diagnostics/
 .private/
 **/.private/
+decompiled/
+probe_scripts/
 
-# Local Development & Release Tooling (Excluded from public repo)
-safe_*.ps1
-run_*.bat
-check_vault_leaks.ps1
-scripts/
+# Build sources, licenses and the installer helper DLL stay trackable.

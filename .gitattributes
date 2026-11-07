@@ -1,0 +1,8 @@
+# Documentation is not application language usage.
+docs/** linguist-documentation
+*.md linguist-documentation
+
+# The active hardware core has maintained local patches. Keep it visible.
+native/src/OpenRevo.Upstream/** linguist-vendored=false
+
+# No text/eol/encoding filters: preserve the accepted source bytes.
