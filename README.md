@@ -2,9 +2,11 @@
 
 **0.7.0** · Windows x64 · WinUI 3
 
-[下载 x64 安装包](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0/Open-Revo-0.7.0-Setup-x64.exe) · [对应源码](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0/Open-Revo-0.7.0-Source.zip) · [更新日志](docs/releases/0.7.0.md) · [GitHub 发布页](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.7.0) · [English](README_en.md)
+[下载 x64 安装包](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0.0/Open-Revo-0.7.0-Setup-x64.exe) · [对应源码](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0.0/Open-Revo-0.7.0-Source.zip) · [更新日志](docs/releases/0.7.0.md) · [GitHub 发布页](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.7.0.0) · [English](README_en.md)
 
 OpenRevo 用于管理兼容设备的性能档位、充电上限、屏幕和键盘灯光。可用功能取决于机型和驱动。
+
+**开机自启热修复**。修复登录时任务栏尚未就绪导致的自启弹窗和后台退出。登录自启延后 3 秒，手动打开仍即时启动。已安装 0.7.0 的用户可在软件内检查更新。
 
 ## 0.7.0 的主要变化
 

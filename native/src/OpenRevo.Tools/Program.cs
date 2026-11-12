@@ -74,7 +74,7 @@ internal static class Program
             }
             if(request.Operation=="update-directory")
             {await Write(new { Done=true,Outcome=1,Application=new PanelApplicationReply(Directory:StartupRegistration.PrepareResidentUpdateCache(installation)) });return 0;}
-            var current=new Version("0.7.0");
+            var current=ReleaseUpdater.InstalledUpdateVersion(new Version("0.7.0"));
             if(request.Operation=="update-check")
             {
                 using var http=new HttpClient{Timeout=TimeSpan.FromSeconds(20)};

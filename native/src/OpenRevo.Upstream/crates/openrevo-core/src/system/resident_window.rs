@@ -12,11 +12,12 @@ use windows::Win32::UI::Shell::{
 };
 pub use windows::Win32::UI::WindowsAndMessaging::WNDPROC;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetWindowLongPtrW, IsWindow, LoadImageW, RegisterClassExW, RegisterWindowMessageW,
-    SetWindowLongPtrW, TranslateMessage, UnregisterClassW, CREATESTRUCTW, GWLP_USERDATA, HICON,
-    HMENU, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, MSG, WM_CLOSE, WM_DESTROY, WM_NCCREATE,
-    WM_NCDESTROY, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    ChangeWindowMessageFilterEx, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
+    DispatchMessageW, GetMessageW, GetWindowLongPtrW, IsWindow, LoadImageW, RegisterClassExW,
+    RegisterWindowMessageW, SetWindowLongPtrW, TranslateMessage, UnregisterClassW, CREATESTRUCTW,
+    GWLP_USERDATA, HICON, HMENU, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, MSG, MSGFLT_ALLOW,
+    WM_DESTROY, WM_NCCREATE, WM_NCDESTROY, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_POPUP,
 };
 
 pub struct TrayMessages {
@@ -46,12 +47,27 @@ pub unsafe fn run(
         procedure,
         tooltip: &tooltip,
         taskbar: register_message(w!("TaskbarCreated"))?,
+        wake,
         refresh: messages.refresh,
         tray: TrayIcon::load(icon_path, messages.callback)?,
     };
     let window = ResidentWindow::create(kind.window_class(), &context)?;
+    // Explorer may be at a lower integrity level than the resident host.
+    // This message only requests a tray refresh and never reaches the caller.
+    if let Err(error) =
+        ChangeWindowMessageFilterEx(window.handle, context.taskbar, MSGFLT_ALLOW, None)
+    {
+        crate::log_warn!(
+            "TRAY",
+            "Could not allow TaskbarCreated notification: {error}"
+        );
+    }
+    // The shell may not be ready at logon. Keep pumping so it can notify us.
     if !context.tray.add(window.handle, context.tooltip) {
-        return Err(Error::from_hresult(HRESULT(0x80004005_u32 as i32))); // E_FAIL
+        crate::log_warn!(
+            "TRAY",
+            "Notification icon unavailable; awaiting TaskbarCreated"
+        );
     }
     let result = if ready(window.handle, wake) {
         pump_messages()
@@ -66,6 +82,7 @@ struct WindowContext<'a> {
     procedure: WNDPROC,
     tooltip: &'a dyn Fn(&mut [u16]),
     taskbar: u32,
+    wake: u32,
     refresh: u32,
     tray: TrayIcon,
 }
@@ -97,10 +114,16 @@ unsafe extern "system" fn window_procedure(
     };
     match message {
         id if id == context.taskbar => {
-            if context.tray.added.replace(false) && !context.tray.add(window, context.tooltip) {
-                forward(WM_CLOSE, WPARAM(0), LPARAM(0));
+            if !context.tray.add(window, context.tooltip) {
+                crate::log_error!(
+                    "TRAY",
+                    "Could not restore notification icon after TaskbarCreated"
+                );
             }
             return LRESULT(0);
+        }
+        id if id == context.wake && !context.tray.added.get() => {
+            context.tray.add(window, context.tooltip);
         }
         id if id == context.refresh => {
             if context.tray.added.get() {

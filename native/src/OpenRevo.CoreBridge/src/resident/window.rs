@@ -256,7 +256,7 @@ fn start(paired: bool, installed: bool, open: bool) -> Result<(), String> {
         )
     };
     drop(lease);
-    result.map_err(|e| e.to_string())?;
+    result.map_err(|error| format!("后台托盘窗口运行失败：{error}"))?;
     stopped.into_inner()
 }
 unsafe extern "system" fn procedure(

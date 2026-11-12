@@ -102,7 +102,7 @@ internal static class Program
                 foreach(string retired in new[]{"OpenRevo.Resident.dll","OpenRevo.Resident.deps.json","OpenRevo.Resident.runtimeconfig.json"})
                     if(File.Exists(Path.Combine(path,retired)))throw new IOException("请移除上一版托管后台文件后重试安装。");
                 var version=System.Diagnostics.FileVersionInfo.GetVersionInfo(Path.Combine(path,host));
-                if(version.ProductVersion!="0.7.0"||version.FileVersion!="1.0.5")throw new IOException("原生Core版本未配对。");
+                if(version.ProductVersion!="0.7.0"||version.FileVersion!="1.0.6")throw new IOException("原生Core版本未配对。");
             }
             else foreach(string file in new[]{"OpenRevo.Resident.dll","OpenRevo.Resident.runtimeconfig.json"})
                 ProtectedInstallDirectory.Check(new FileInfo(Path.Combine(path,file)));

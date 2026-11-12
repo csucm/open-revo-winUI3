@@ -37,7 +37,7 @@ public sealed partial class MainWindow
         try
         {
             using var http=new HttpClient{Timeout=TimeSpan.FromSeconds(20)};
-            availableUpdate=await new ReleaseUpdater(http).CheckAsync(BuildInfo.PublicReleaseVersion);
+            availableUpdate=await new ReleaseUpdater(http).CheckAsync(ReleaseUpdater.InstalledUpdateVersion(BuildInfo.PublicReleaseVersion));
             updateMessage=availableUpdate==null?"已是最新社区版。":$"发现 {availableUpdate.Version.ToString(3)} · {availableUpdate.Size/1048576.0:F1} MiB；下载完成后将退出并自动安装。";
         }
         catch(Exception error){availableUpdate=null;updateMessage="检查失败："+error.Message;DiagnosticLog.Failure("update.check.failed",error);}

@@ -2,7 +2,9 @@
 
 **0.7.0** · Windows x64 · WinUI 3
 
-[Download installer](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0/Open-Revo-0.7.0-Setup-x64.exe) · [Corresponding source](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0/Open-Revo-0.7.0-Source.zip) · [Release notes](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.7.0) · [简体中文](README.md)
+[Download installer](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0.0/Open-Revo-0.7.0-Setup-x64.exe) · [Corresponding source](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0.0/Open-Revo-0.7.0-Source.zip) · [Release notes](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.7.0.0) · [简体中文](README.md)
+
+**Startup hotfix**. Fixes a sign-in error that could stop OpenRevo when the Windows taskbar was still loading. Existing 0.7.0 installations can check for the update in the app.
 
 OpenRevo is a community port for managing performance profiles, battery charging, display settings, and keyboard lighting on supported devices.
 

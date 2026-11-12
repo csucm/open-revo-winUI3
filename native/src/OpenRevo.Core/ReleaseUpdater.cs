@@ -17,6 +17,10 @@ public sealed class ReleaseUpdater
     private readonly HttpClient client;
     public ReleaseUpdater(HttpClient client) => this.client = client;
 
+    // The installed 0.7.0 updater accepts an explicit zero revision and treats
+    // it as newer than an omitted revision. Keep that identity after upgrading.
+    public static Version InstalledUpdateVersion(Version publicVersion) =>
+        publicVersion == new Version(0, 7, 0) ? new Version(0, 7, 0, 0) : publicVersion;
 
     public static NativeRelease? ParseReleases(string json, Version current)
     {
