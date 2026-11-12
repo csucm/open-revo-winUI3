@@ -2,7 +2,7 @@
   <PropertyGroup>
     <!-- Public release identity must agree between the host and either panel entry. -->
     <PublicReleaseVersion Condition="'$(PublicReleaseVersion)'==''">0.7.0</PublicReleaseVersion>
-    <InternalBuildVersion Condition="'$(InternalBuildVersion)'==''">1.0.5</InternalBuildVersion>
+    <InternalBuildVersion Condition="'$(InternalBuildVersion)'==''">1.0.6</InternalBuildVersion>
     <AssemblyVersion Condition="'$(AssemblyVersion)'==''">$(InternalBuildVersion).0</AssemblyVersion>
     <FileVersion Condition="'$(FileVersion)'==''">$(InternalBuildVersion).0</FileVersion>
     <InformationalVersion Condition="'$(InformationalVersion)'==''">$(InternalBuildVersion)</InformationalVersion>

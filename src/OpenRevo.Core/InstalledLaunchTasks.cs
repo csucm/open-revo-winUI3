@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
+using System.Xml;
 using System.Xml.Linq;
 
 namespace OpenRevo.Core;
@@ -12,6 +13,7 @@ internal static class InstalledLaunchTasks
     private static readonly XNamespace Ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
     private const string OwnerFile = "launch-owner.sid";
     private const string Bootstrap = "OpenRevo.TaskEntry.exe";
+    private const string LogonDelay = "PT3S";
     private static string Sid
     {
         get
@@ -60,6 +62,13 @@ internal static class InstalledLaunchTasks
             writer.Write(Sid);
         }
         SetTask(directory, logon: false, enabled: true);
+        // Upgrade enabled tasks created before the delay was added. Preserve
+        // disabled or absent tasks and existing nonzero delays.
+        if (WithTask(directory, logon: true, (task, _, _, _) =>
+            task != null && (bool)((dynamic)task).Enabled &&
+            ReadLogonDelay(XElement.Parse((string)((dynamic)task).Xml)
+                .Element(Ns + "Triggers")!.Element(Ns + "LogonTrigger")!) == TimeSpan.Zero))
+            SetLogon(directory, true);
     }
 
     internal static void Remove(string directory)
@@ -123,7 +132,7 @@ internal static class InstalledLaunchTasks
             try
             {
                 bool confirmed = enabled
-                    ? actual != null && (bool)((dynamic)actual).Enabled && Matches((string)((dynamic)actual).Xml, directory, sid, logon)
+                    ? actual != null && (bool)((dynamic)actual).Enabled && Matches((string)((dynamic)actual).Xml, directory, sid, logon, verifyDelay: true)
                         && HasLaunchOnlyAccess((string)((dynamic)actual).GetSecurityDescriptor(5), sid)
                     : actual == null;
                 if (!confirmed) throw new IOException("启动任务回读与安装设置不一致。");
@@ -184,7 +193,8 @@ internal static class InstalledLaunchTasks
     {
         XElement E(string name, params object[] content) => new(Ns + name, content);
         var task = E("Task", new XAttribute("version", "1.2"));
-        if (logon) task.Add(E("Triggers", E("LogonTrigger", E("Enabled", "true"), E("UserId", sid))));
+        if (logon)
+            task.Add(E("Triggers", E("LogonTrigger", E("Enabled", "true"), E("UserId", sid), E("Delay", LogonDelay))));
         task.Add(
             E("Principals", E("Principal", new XAttribute("id", "Console"), E("UserId", sid),
                 E("LogonType", "InteractiveToken"), E("RunLevel", "HighestAvailable"))),
@@ -195,7 +205,16 @@ internal static class InstalledLaunchTasks
         return task.ToString();
     }
 
-    private static bool Matches(string xml, string directory, string sid, bool logon)
+    private static TimeSpan? ReadLogonDelay(XElement trigger)
+    {
+        string? delay = (string?)trigger.Element(Ns + "Delay");
+        if (delay == null) return TimeSpan.Zero;
+        try { return XmlConvert.ToTimeSpan(delay); }
+        catch (FormatException) { return null; }
+        catch (OverflowException) { return null; }
+    }
+
+    private static bool Matches(string xml, string directory, string sid, bool logon, bool verifyDelay = false)
     {
         var root = XElement.Parse(xml);
         var actions = root.Element(Ns + "Actions");
@@ -219,6 +238,7 @@ internal static class InstalledLaunchTasks
             (string?)exec.Element(Ns + "Arguments") == Arguments(logon) &&
             (logon ? triggers is [var trigger] && trigger.Name == Ns + "LogonTrigger" &&
                 Identity((string?)trigger.Element(Ns + "UserId")) &&
+                (!verifyDelay || ReadLogonDelay(trigger) == TimeSpan.FromSeconds(3)) &&
                 (string?)trigger.Element(Ns + "Enabled") is null or "true" or "1" : triggers.Length == 0);
     }
 
