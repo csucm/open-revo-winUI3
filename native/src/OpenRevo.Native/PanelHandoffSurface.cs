@@ -26,6 +26,8 @@ internal sealed class PanelHandoffSurface : IDisposable
     private static readonly WindowProc ClassCallback = Dispatch;
     private static ushort windowClass;
     private const string ClassName = "OpenRevo.PanelHandoff.v1";
+    internal static int ActiveCount => Surfaces.Count;
+    internal static long ActiveBitmapBytes => Surfaces.Values.Sum(surface => (long)surface.bounds.Width * surface.bounds.Height * 4);
 
     internal static async Task<PanelHandoffSurface> Capture(FrameworkElement content, nint owner,
         int nativeCaptionInset, int captionHeight, RectInt32 toggleBounds, Action<uint> command, CancellationToken stop)
@@ -74,12 +76,12 @@ internal sealed class PanelHandoffSurface : IDisposable
         var visible = new Rect { Left = Math.Max(frameBounds.Left, origin.X), Top = Math.Max(frameBounds.Top, origin.Y),
             Right = Math.Min(frameBounds.Right, origin.X + Math.Min(client.Right, Math.Min(targetWidth, image.PixelWidth))),
             Bottom = Math.Min(frameBounds.Bottom, origin.Y + Math.Min(client.Bottom, Math.Min(targetHeight, image.PixelHeight))) };
-        return new(owner, outer, frameBounds, visible, origin, client.Right, client.Bottom, image.PixelWidth, image.PixelHeight,
+        return new(owner, outer, frameBounds, visible, origin, client.Right, image.PixelWidth, image.PixelHeight,
             pixels, nativeCaptionInset, captionHeight, toggleBounds, command);
     }
 
     private PanelHandoffSurface(nint owner, Rect outer, Rect frameBounds, Rect visible, Point clientOrigin,
-        int clientWidth, int clientHeight, int imageWidth, int imageHeight, IBuffer pixels, int inset, int captionHeight, RectInt32 toggleBounds, Action<uint> command)
+        int clientWidth, int imageWidth, int imageHeight, IBuffer pixels, int inset, int captionHeight, RectInt32 toggleBounds, Action<uint> command)
     {
         this.command = command;
         contentWidth = visible.Right - visible.Left; contentHeight = visible.Bottom - visible.Top;
@@ -97,27 +99,32 @@ internal sealed class PanelHandoffSurface : IDisposable
             toggleBounds.Width, toggleBounds.Height);
         buttonWidth = Math.Max(1, inset / 3);
         int width = outer.Right - outer.Left, height = outer.Bottom - outer.Top;
+        int x0 = clientOrigin.X - outer.Left, y0 = clientOrigin.Y - outer.Top;
+        int clientX = visible.Left - clientOrigin.X, clientY0 = visible.Top - clientOrigin.Y;
+        if (offsetX < 0 || offsetY < 0 || contentWidth > width - offsetX || contentHeight > height - offsetY ||
+            clientX < 0 || clientY0 < 0 || contentWidth > imageWidth - clientX || contentHeight > imageHeight - clientY0)
+            throw new InvalidOperationException("Panel capture crop is outside the source pixels.");
+        int printHeight = Math.Clamp(y0 + captionHeight, 1, height);
         int nativeStride = checked(width * 4);
-        _ = checked(nativeStride * height);
         nint nativeDc = 0, nativeBitmap = 0, oldNativeBitmap = 0;
         try
         {
-            // RenderTargetBitmap excludes system non-client visuals. Ask the
-            // owner to print its native frame/caption, then replace the XAML
-            // client pixels while retaining the system caption-button strip.
+            // Print at the original window origin. The short bitmap keeps only
+            // the rows that can contain system caption buttons.
             nativeDc = CreateCompatibleDC(0);
-            var info = Dib(width, height);
+            if (nativeDc == 0) throw new InvalidOperationException("Could not create the caption capture DC.");
+            var info = Dib(width, printHeight);
             nativeBitmap = CreateDIBSection(nativeDc, ref info, 0, out nint nativeBits, 0, 0);
-            if (nativeDc == 0 || nativeBitmap == 0) ThrowNative();
+            if (nativeBitmap == 0 || nativeBits == 0) ThrowNative();
             oldNativeBitmap = SelectObject(nativeDc, nativeBitmap);
+            if (oldNativeBitmap == 0) throw new InvalidOperationException("Could not select the caption capture bitmap.");
             if (!PrintWindow(owner, nativeDc, 2)) ThrowNative();
-            int x0 = clientOrigin.X - outer.Left, y0 = clientOrigin.Y - outer.Top;
             // Some display/composition paths acknowledge WM_PRINT without
             // painting the DWM caption. Never animate an empty/black strip.
             if (inset > 0)
             {
                 int left = Math.Max(0, x0 + clientWidth - inset + 4), right = Math.Min(width, x0 + clientWidth - 4);
-                int top = Math.Max(0, y0 + 4), bottom = Math.Min(height, y0 + captionHeight - 4);
+                int top = Math.Max(0, y0 + 4), bottom = Math.Min(printHeight, y0 + captionHeight - 4);
                 int minimum = 255, maximum = 0;
                 byte[] captionRow = new byte[Math.Max(0, right - left) * 4];
                 for (int y = top; y < bottom; y++)
@@ -132,47 +139,34 @@ internal sealed class PanelHandoffSurface : IDisposable
                 if (maximum - minimum < 12)
                     throw new InvalidOperationException("The native caption could not be captured; using a direct panel switch.");
             }
-            // The WinRT stream shares the capture buffer. Copy one row at a
-            // time to keep the temporary managed allocation off the LOH.
-            using (Stream source = pixels.AsStream())
-            {
-                int imageStride = checked(imageWidth * 4);
-                int copyWidth = Math.Min(clientWidth, imageWidth);
-                int captionWidth = Math.Min(copyWidth, Math.Max(0, clientWidth - inset));
-                byte[] pixelRow = new byte[checked(copyWidth * 4)];
-                for (int y = 0; y < Math.Min(clientHeight, imageHeight); y++)
-                {
-                    // Native caption buttons overlap the extended XAML client.
-                    int count = y < captionHeight ? captionWidth : copyWidth;
-                    int destY = y + y0;
-                    if (count == 0 || destY < 0 || destY >= height || x0 < 0 || x0 > width - count) continue;
-                    source.Position = (long)y * imageStride;
-                    int bytes = checked(count * 4);
-                    source.ReadExactly(pixelRow, 0, bytes);
-                    Marshal.Copy(pixelRow, 0, nativeBits + checked(destY * nativeStride + x0 * 4), bytes);
-                }
-            }
             dc = CreateCompatibleDC(0);
+            if (dc == 0) throw new InvalidOperationException("Could not create the panel presentation DC.");
             info = Dib(bounds.Width, bounds.Height);
             bitmap = CreateDIBSection(dc, ref info, 0, out nint bits, 0, 0);
-            if (dc == 0 || bitmap == 0) ThrowNative();
+            if (bitmap == 0 || bits == 0) ThrowNative();
             previousBitmap = SelectObject(dc, bitmap);
+            if (previousBitmap == 0) throw new InvalidOperationException("Could not select the panel presentation bitmap.");
             // Preserve the XAML premultiplied alpha. Only the native caption
             // strip is GDI-painted and needs an explicit opaque alpha. Making
             // the entire WM_PRINT frame opaque creates a black perimeter.
             byte[] row = new byte[checked(bounds.Width * 4)];
+            using Stream source = pixels.AsStream();
+            int captionStart = Math.Clamp(clientWidth - inset - clientX, 0, contentWidth);
             for (int y = 0; y < bounds.Height; y++)
             {
                 Array.Clear(row);
                 int contentY = y - padding;
                 if (contentY >= 0 && contentY < contentHeight)
                 {
-                    Marshal.Copy(nativeBits + ((contentY + offsetY) * width + offsetX) * 4, row, padding * 4, contentWidth * 4);
-                    int clientY = visible.Top + contentY - clientOrigin.Y;
-                    if (clientY >= 0 && clientY < captionHeight)
+                    int clientY = clientY0 + contentY;
+                    int xamlWidth = clientY < captionHeight ? captionStart : contentWidth;
+                    source.Position = ((long)clientY * imageWidth + clientX) * 4;
+                    source.ReadExactly(row, padding * 4, xamlWidth * 4);
+                    if (xamlWidth < contentWidth)
                     {
-                        int first = Math.Max(0, clientOrigin.X + clientWidth - inset - visible.Left);
-                        for (int x = first; x < contentWidth; x++) row[(x + padding) * 4 + 3] = 255;
+                        int printOffset = checked((contentY + offsetY) * nativeStride + (offsetX + xamlWidth) * 4);
+                        Marshal.Copy(nativeBits + printOffset, row, (padding + xamlWidth) * 4, (contentWidth - xamlWidth) * 4);
+                        for (int x = xamlWidth; x < contentWidth; x++) row[(x + padding) * 4 + 3] = 255;
                     }
                     double screenY = visible.Top + contentY + .5;
                     double dy = radius > 0 ? screenY - Math.Clamp(screenY, frameBounds.Top + radius, frameBounds.Bottom - radius) : 0;
@@ -204,7 +198,9 @@ internal sealed class PanelHandoffSurface : IDisposable
             OpenRevo.Core.DiagnosticLog.Record("window.handoff_frame_crop", new { frameLeft = frameBounds.Left, frameTop = frameBounds.Top,
                 frameWidth = frameBounds.Right - frameBounds.Left, frameHeight = frameBounds.Bottom - frameBounds.Top,
                 contentLeft = visible.Left, contentTop = visible.Top, contentWidth, contentHeight,
-                preservesXamlAlpha = true, radius, shadowPadding = padding, shadowSharesWindowAlpha = true });
+                preservesXamlAlpha = true, radius, shadowPadding = padding, shadowSharesWindowAlpha = true,
+                xamlBufferBytes = pixels.Length, printBitmapBytes = (long)nativeStride * printHeight,
+                layerBitmapBytes = (long)row.Length * bounds.Height });
             EnsureWindowClass();
             window = CreateWindowEx(0x08080080, ClassName, "", 0x80000000,
                 bounds.X, bounds.Y, bounds.Width, bounds.Height, 0, 0, GetModuleHandle(null), 0);
@@ -218,9 +214,7 @@ internal sealed class PanelHandoffSurface : IDisposable
         catch { Dispose(); throw; }
         finally
         {
-            if (oldNativeBitmap != 0) SelectObject(nativeDc, oldNativeBitmap);
-            if (nativeBitmap != 0) DeleteObject(nativeBitmap);
-            if (nativeDc != 0) DeleteDC(nativeDc);
+            ReleaseBitmapDc(nativeDc, nativeBitmap, oldNativeBitmap, "caption");
         }
     }
 
@@ -254,10 +248,24 @@ internal sealed class PanelHandoffSurface : IDisposable
     {
         if (disposed) return;
         disposed = true;
-        if (window != 0) { nint handle = window; window = 0; Surfaces.Remove(handle); DestroyWindow(handle); }
-        if (previousBitmap != 0 && dc != 0) SelectObject(dc, previousBitmap);
-        if (bitmap != 0) DeleteObject(bitmap);
-        if (dc != 0) DeleteDC(dc);
+        if (window != 0)
+        {
+            nint handle = window; window = 0; Surfaces.Remove(handle);
+            if (!DestroyWindow(handle))
+                OpenRevo.Core.DiagnosticLog.Event("window.handoff_destroy_failed", "warning", throttle:true);
+        }
+        ReleaseBitmapDc(dc, bitmap, previousBitmap, "presentation");
+    }
+
+    private static void ReleaseBitmapDc(nint dc, nint bitmap, nint previous, string stage)
+    {
+        bool restored = previous == 0 || SelectObject(dc, previous) != 0;
+        // Release the memory DC first so it cannot hold a failed restoration's bitmap.
+        bool dcReleased = dc == 0 || DeleteDC(dc);
+        bool bitmapReleased = bitmap == 0 || DeleteObject(bitmap);
+        if (!restored || !dcReleased || !bitmapReleased)
+            OpenRevo.Core.DiagnosticLog.Event("window.handoff_gdi_release_failed", "warning",
+                new { stage, restored, dcReleased, bitmapReleased }, throttle:true);
     }
 
     private nint OnMessage(nint hwnd, uint message, nuint wParam, nint lParam)

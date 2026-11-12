@@ -41,7 +41,21 @@ pub fn is_locked() -> bool {
 }
 
 pub fn set_locked(locked: bool) -> Result<(), String> {
+    set_locked_worker(&mut HOOK.lock().unwrap(), locked)
+}
+
+pub fn toggle_locked() -> Result<bool, String> {
     let mut worker = HOOK.lock().unwrap();
+    let target = !worker.as_ref().is_some_and(|(_, thread)| !thread.is_finished());
+    set_locked_worker(&mut worker, target)?;
+    let confirmed = worker.as_ref().is_some_and(|(_, thread)| !thread.is_finished());
+    if confirmed != target {
+        return Err("Windows Win 键软件锁未确认改变。".into());
+    }
+    Ok(confirmed)
+}
+
+fn set_locked_worker(worker: &mut Option<(u32, JoinHandle<()>)>, locked: bool) -> Result<(), String> {
     if worker.as_ref().is_some_and(|(_, thread)| thread.is_finished()) {
         if let Some((_, thread)) = worker.take() { let _ = thread.join(); }
     }

@@ -83,6 +83,7 @@ public sealed partial class MainWindow
 
     private async Task RunPanelHandoff(bool animate)
     {
+        bool animationRequested = animate;
         bool sourceMini = mini, sourceMaximized = AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Maximized };
         bool initialGoal = panelGoalMini;
         RectInt32 sourceBounds = new(AppWindow.Position.X, AppWindow.Position.Y, AppWindow.Size.Width, AppWindow.Size.Height);
@@ -90,7 +91,7 @@ public sealed partial class MainWindow
         double sourceScale = GetDpiForWindow(captionWindow) / 96d;
         double previousWidth = root.Width, previousHeight = root.Height;
         bool previousHitTest = root.IsHitTestVisible;
-        bool showFallback = false, restoreFocus = false;
+        bool showFallback = false, restoreFocus = false, finishFailed = false;
         string? failure = null;
         nint foregroundAtStart = NativeOsd.Foreground;
         if (!sourceMini) normalBounds = sourceBounds;
@@ -222,12 +223,14 @@ public sealed partial class MainWindow
                         }
                     }
                 }
-                catch (Exception error) { DiagnosticLog.Failure("window.handoff_finish", error); }
+                catch (Exception error) { finishFailed = true; DiagnosticLog.Failure("window.handoff_finish", error); }
             }
             // Always release native windows, DIBs and memory DCs, including on
             // hide, exit, reversal, capture failure and a destroyed owner.
             panelLargeSurface?.Dispose(); panelLargeSurface = null;
             panelMiniSurface?.Dispose(); panelMiniSurface = null;
+            int activeLayersAfterCleanup = PanelHandoffSurface.ActiveCount;
+            long activeBitmapBytesAfterCleanup = PanelHandoffSurface.ActiveBitmapBytes;
             panelCompositionGuard?.Dispose(); panelCompositionGuard = null;
             if (showFallback && !closed && !trayHidden && !exitRequested) AppWindow.Show(false);
             panelMotionStop = null; root.IsHitTestVisible = previousHitTest;
@@ -242,12 +245,18 @@ public sealed partial class MainWindow
                     foregroundAtStart == captionWindow && NativeOsd.Foreground != 0 && NativeOsd.Foreground != captionWindow && AppWindow.IsVisible)
                     HideToTray();
                 UpdatePolling();
+                if (residentClient != null && !mini && customTuningOpen && residentTuning == null)
+                    _ = PaintReadTuning(automatic: true);
                 // A command arriving during the endpoint commit starts the next
                 // trip. Commands during playback reverse the retained timeline.
                 if (!trayHidden && !exitRequested && mini != panelGoalMini) ToggleMini();
             }
             ObservePanelHandoff(panelProgress, lastPanelMotionFrames, failure);
-            DiagnosticLog.Record("window.handoff_completed", new { mini, frames = lastPanelMotionFrames, durationMs = PanelHandoffGeometry.DurationMilliseconds / panelPlaybackRate, rate = panelPlaybackRate, cloakMs = lastPanelCloakMs });
+            DiagnosticLog.Record("window.handoff_completed", new { mini, frames = lastPanelMotionFrames,
+                durationMs = PanelHandoffGeometry.DurationMilliseconds / panelPlaybackRate, rate = panelPlaybackRate, cloakMs = lastPanelCloakMs,
+                animationRequested, cancelled = stop.IsCancellationRequested, cloakFallback = showFallback,
+                captureOrPresentationFailed = failure != null, finishFailed,
+                activeLayers = activeLayersAfterCleanup, activeLayerBitmapBytes = activeBitmapBytesAfterCleanup });
         }
     }
     private void PlacePanel(RectInt32 bounds)

@@ -30,10 +30,24 @@ public sealed partial class HardwareSession
         }
     }
 
+    public void ValidateDeclaredCpuTuning(DeclaredTuningPreset preset)
+    {
+        if(DeclaredCpuTuning is not {} limits||preset.Manifest!=Admission.Manifest)
+            throw new ArgumentException("Core 未声明此设备的 CPU 调校能力。");
+        if(preset.Pl1<limits.Pl1Min||preset.Pl1>limits.Pl1Max||preset.Pl2<limits.Pl2Min||preset.Pl2>limits.Pl2Max||
+           preset.Pl1>preset.Pl2||preset.Temperature is not (0 or >=70 and <=100))
+            throw new ArgumentException("功耗或温度不在本机声明范围。");
+        if(!preset.CustomFans)return;
+        if(!limits.FanCurve)throw new ArgumentException("Core 未声明此设备的风扇曲线控制。");
+        ValidateFanCurve(preset.CpuCurve);
+        ValidateFanCurve(preset.GpuCurve);
+    }
+
     public object ApplyDeclaredCpuTuning(DeclaredTuningPreset preset) => Serialized(() =>
     {
         Guard();
         if(!Active||DeclaredCpuTuning==null||preset.Manifest!=Admission.Manifest)throw new InvalidOperationException("Core 未声明 CPU 调校。");
+        ValidateDeclaredCpuTuning(preset);
         if(!AllowBatteryPerformance&&acOnline()!=true)throw new IOException("CPU 调校需要交流供电。");
         var (_,pl1,pl2,temperature,customFans,cpuCurve,gpuCurve,_)=preset;
         audit(new{operation="core-cpu-profile-intent",pl1,pl2,temperature});

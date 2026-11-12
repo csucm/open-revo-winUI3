@@ -115,16 +115,18 @@ public sealed partial class MainWindow
         planChoice.SelectionChanged+=async(_,_)=>
         {
             if(syncingPlans||planChoice.SelectedItem is not PowerPlan requested||upstream==null||settingsPowerBusy)return;
-            settingsPowerBusy=true;planChoice.IsEnabled=false;await operationQueue.WaitAsync();
-            try{await Task.Run(()=>{var plans=new WindowsPowerPlans();Guid before=plans.Active();if(!plans.List().Any(p=>p.Id==requested.Id))throw new IOException("目标方案不存在。");if(plans.Active()!=before)throw new IOException("当前方案已被外部修改，请刷新。");upstream.ExecuteFeature(11,new{scheme=requested.Id.ToString("D")});if(plans.Active()!=requested.Id)throw new IOException("电源方案回读不一致。");});await ReadPlans();}
+            settingsPowerBusy=true;planChoice.IsEnabled=false;
+            if(!await operationQueue.EnterAsync()){settingsPowerBusy=false;planChoice.IsEnabled=true;return;}
+            try{await Task.Run(()=>hardwareRuntime.Desktop.SelectPowerPlan(requested.Id));await ReadPlans();}
             catch(Exception error){await ShowMessage("方案切换未完成",error.Message);await ReadPlans();}finally{settingsPowerBusy=false;planChoice.IsEnabled=true;operationQueue.Release();}
         };
         var resetPlans=Ui.Button("修复 / 重置计划",async(_,_)=>
         {
             if(upstream==null||!hardware.Active||settingsPowerBusy)return;
             if(!await Confirm("修复 Windows 电源计划？","先备份全部电源方案，再重建内置计划、尝试恢复本机 OEM PPM 调度。自建方案会检查保留；内置方案的定制参数和睡眠策略可能重置。不会自动重启。"))return;
-            settingsPowerBusy=true;await operationQueue.WaitAsync();
-            try{string result=await Task.Run(()=>PowerPlanRecovery.Restore(upstream));await ReadPlans();await ReadDesktopServices(true);await ShowMessage("电源计划恢复结果",result);}
+            settingsPowerBusy=true;
+            if(!await operationQueue.EnterAsync()){settingsPowerBusy=false;return;}
+            try{string result=await Task.Run(hardwareRuntime.Desktop.RecoverPowerPlans);await ReadPlans();await ReadDesktopServices(true);await ShowMessage("电源计划恢复结果",result);}
             catch(Exception error){await ShowMessage("修复未完成",error.Message);}finally{settingsPowerBusy=false;operationQueue.Release();}
         });resetPlans.IsEnabled=hardware.Active&&upstream!=null;
         var refreshPlans=Ui.Button("刷新",async(_,_)=>await ReadPlans());
@@ -175,10 +177,17 @@ public sealed partial class MainWindow
     }
     private async Task PauseForDataMaintenance(Func<Task> action)
     {
-        settingsDataBusy=true;navigation.IsEnabled=false;if(themeToggle!=null)themeToggle.IsEnabled=false;if(panelToggle!=null)panelToggle.IsEnabled=false;
-        timer.Stop();powerTimer?.Stop();while(hardwareBusy||quickBusy||takeoverChanging||requestedWinLocked.HasValue||batteryGuardBusy||tuningApplying||displayBusy||brightnessApplying||gpuChanging||desktopServiceBusy||sleepOfficeBusy||desktopServicesReading||colorPending)await Task.Delay(40);await operationQueue.WaitAsync();
-        try{UserDataStore.EnsureMarker();await action();}
-        finally{operationQueue.Release();settingsDataBusy=false;if(!dataStorageExitPending){navigation.IsEnabled=true;if(themeToggle!=null)themeToggle.IsEnabled=true;if(panelToggle!=null)panelToggle.IsEnabled=true;UpdatePolling();if(pollingActive)timer.Start();powerTimer?.Start();}}
+        settingsDataBusy=true;SynchronizeModeKeyMonitor();navigation.IsEnabled=false;if(themeToggle!=null)themeToggle.IsEnabled=false;if(panelToggle!=null)panelToggle.IsEnabled=false;
+        timer.Stop();powerTimer?.Stop();
+        bool entered=false;
+        try
+        {
+            while(!closed&&(hardwareBusy||quickBusy||takeoverChanging||requestedWinLocked.HasValue||batteryGuardBusy||tuningApplying||displayBusy||brightnessApplying||gpuChanging||desktopServiceBusy||sleepOfficeBusy||desktopServicesReading||colorPending))await Task.Delay(40);
+            entered=await operationQueue.EnterAsync();
+            if(!entered)throw new OperationCanceledException("应用正在退出。");
+            await PauseNativePluginsForDataMaintenanceAsync();UserDataStore.EnsureMarker();await action();
+        }
+        finally{if(entered)operationQueue.Release();settingsDataBusy=false;if(!closed&&!dataStorageExitPending){SynchronizeModeKeyMonitor();navigation.IsEnabled=true;if(themeToggle!=null)themeToggle.IsEnabled=true;if(panelToggle!=null)panelToggle.IsEnabled=true;UpdatePolling();if(pollingActive)timer.Start();powerTimer?.Start();}}
     }
     private void RenderDebugSettings(StackPanel rows,Func<string,string[],int,Func<int,Task>,double,ComboBox> choice,Func<string,bool,Func<bool,Task>,ToggleSwitch> toggle)
     {

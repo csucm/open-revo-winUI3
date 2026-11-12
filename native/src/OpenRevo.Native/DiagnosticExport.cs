@@ -17,20 +17,26 @@ public sealed partial class MainWindow
         admission=CoreMachine.Current,takeover=new{active=hardware.Active,message=hardwareMessage,automaticRetryPending=automaticTakeoverPending},
         defaultDiagnosticsDirectory=AppData.DiagnosticsPath,system=latest,hardware=ec,display=displayState,control=hardware.State,
         performanceOperation=hardware.PerformanceDiagnostics,
-        physicalModeKey=new{attempted=modeKeyAttempted,starting=modeKeyStarting,subscribed=modeKeyObserver?.Installed==true,failure=modeKeyObserver?.Failure,indicatorWarning=hardware.ModeIndicatorWarning},
+        physicalModeKey=BuildPhysicalModeReport(),
         startup=StartupRegistration.LastInspection,displayDiagnostics=DisplayTopology.LastSnapshot,
         lighting=new{detected=keyboard,readSucceeded=keyboard.Kind=="White"?CurrentMonochromeLevel.HasValue:lightingReadFresh,
             readError=keyboard.Kind=="White"?CurrentMonochromeLevel.HasValue?null:"白色背光当前档位未能读取。":lightingProbeError,protocol=hardware.LightingDiagnostics},
         quick=new{quickState=new{quickState.Camera,quickState.CameraAvailable,quickState.Microphone,quickState.WinLocked},winLockSource="Windows native keyboard hook; software-only; no firmware readback",winLockPending=requestedWinLocked,extraSwitches},gpuTelemetry=overviewTelemetry,
         cameraWindowsDiagnostics,
         gpuTelemetryAt=overviewTelemetryAt,gpuTelemetryDiagnostics=SafeDiagnostic(()=>upstream?.GpuTelemetryDiagnostics),
-        gpuPresentation=new{currentPage,mini,visible=IsVisibleNow(),fresh=CurrentOverviewGpu!=null,
+            gpuPresentation=new{currentPage,mini,visible=IsVisibleNow(),fresh=OverviewTelemetryFresh&&CurrentOverviewGpu!=null,
             sampleAgeMs=overviewTelemetry==null?(double?)null:(DateTimeOffset.Now-overviewTelemetryAt).TotalMilliseconds},
         monochrome=new{canSend=MonochromeEnabled,requested=monochromeRequested,levels=monochromeLevels,
             currentLevel=CurrentMonochromeLevel,readAt=monochromeReadAt,message=MonochromeStatus,hardwareReadback=CurrentMonochromeLevel.HasValue},
-        osd=SafeDiagnostic(()=>nativeOsd?.Diagnostics),colorDiagnostics=serviceColor.ValueKind==JsonValueKind.Object?(object)serviceColor:null,logging=DiagnosticLog.Collect(AppData.DiagnosticsPath),
+        osd=SafeDiagnostic(()=>nativeOsd?.Diagnostics),colorDiagnostics=serviceColor?.Diagnostics,logging=DiagnosticLog.Collect(AppData.DiagnosticsPath),
         hardwareWritesEnabled=hardware.Active,ecReadEnabled=ecEnabled,actions
     };
+
+    private object BuildPhysicalModeReport()
+    {
+        var status=hardwareRuntime.PerformanceInput.Status;
+        return new{attempted=status.Attempted,starting=false,subscribed=status.Subscribed,failure=status.Failure,indicatorWarning=hardware.ModeIndicatorWarning};
+    }
     private static object? SafeDiagnostic(Func<object?> read){try{return read();}catch(Exception e){return new{error=DiagnosticJournal.Scrub(e.Message),hresult=$"0x{e.HResult:X8}"};}}
     private async Task ExportDiagnosticReport()
     {
@@ -50,12 +56,8 @@ public sealed partial class MainWindow
             await File.WriteAllTextAsync(selected.Path,content);
             diagnosticExportLastPath=selected.Path;
             trace.Complete(new{path=selected.Path,bytes=System.Text.Encoding.UTF8.GetByteCount(content),schema=3});
-            if(UsePaintedUi){if(await PaintDialog("诊断报告已保存",Paint.Text(selected.Path),"打开所在文件夹","完成"))OpenLocalFolder(Path.GetDirectoryName(selected.Path)!);}
-            else
-            {
-            var dialog=new ContentDialog{XamlRoot=root.XamlRoot,Title="诊断报告已保存",Content=Ui.Text(selected.Path,14),PrimaryButtonText="打开所在文件夹",CloseButtonText="完成",DefaultButton=ContentDialogButton.Close};
-            if(await dialog.ShowAsync()==ContentDialogResult.Primary)OpenLocalFolder(Path.GetDirectoryName(selected.Path)!);
-            }
+            if(await PaintDialog("诊断报告已保存",Paint.Text(selected.Path),"打开所在文件夹","完成"))
+                OpenLocalFolder(Path.GetDirectoryName(selected.Path)!);
         }
         catch(Exception error){trace.Fail(error);if(!closed)await ShowMessage("诊断导出失败",error.Message);}
         finally{diagnosticExportBusy=false;}

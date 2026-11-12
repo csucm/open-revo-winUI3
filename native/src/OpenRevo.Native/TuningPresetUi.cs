@@ -7,11 +7,22 @@ using System.Text.Json;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
-    private readonly TuningPresetStore tuningPresetStore=new();
+    private TuningPresetStore? localTuningPresetStore;
+    private TuningPresetStore tuningPresetStore => residentClient == null
+        ? localTuningPresetStore ??= new()
+        : throw new InvalidOperationException("常驻后台负责调校预设文件。");
     private readonly List<TuningPreset> tuningPresets=[];
     private TuningPreset[] tuningBuiltinDefaults=[];
     private string? tuningPresetId;
     private TuningPreset? SelectedTuningPreset=>tuningPresets.FirstOrDefault(p=>p.Id==tuningPresetId);
+    private TuningPreset? FactoryBalancedTuningPreset=>tuningBuiltinDefaults.FirstOrDefault(p=>p.Id=="preset_balance");
+
+    private TuningPreset CreateManualTuningSource(TuningSnapshot state)
+    {
+        var balanced=FactoryBalancedTuningPreset??throw new InvalidOperationException("请先读取本机内置方案。");
+        return TuningPresetStore.CreateManualSource(balanced,state);
+    }
+
     private void InitializeTuningPresets(JsonElement originals,TuningSnapshot state)
     {
         var defaults=originals.EnumerateArray().Select(p=>TuningPresetStore.FromOriginal(p,state,true)).ToArray();
@@ -43,14 +54,15 @@ public sealed partial class MainWindow
         Button Tool(string glyph,string title,Func<Task> action,bool enabled=true)
         {
             var button=Ui.Button(title,async(_,_)=>{try{await action();}catch(Exception error){if(!closed)await ShowMessage("方案操作未完成",error.Message);}});
-            button.Content=title switch{"新建方案（复制当前草稿）"=>"新建","保存当前方案"=>"保存","恢复当前内置方案"=>"恢复内置","重命名方案"=>"重命名","导入 JSON 方案"=>"导入","导出 JSON 方案"=>"导出","打开方案文件夹"=>"打开目录","删除自定义方案"=>"删除",_=>title};button.Padding=new Thickness(12,6,12,6);button.MinHeight=34;button.IsEnabled=enabled;ToolTipService.SetToolTip(button,title);tools.Children.Add(button);return button;
+            button.Content=title switch{"新建手动方案"=>"新建","保存当前方案"=>"保存","恢复当前内置方案"=>"恢复内置","重命名方案"=>"重命名","导入 JSON 方案"=>"导入","导出 JSON 方案"=>"导出","打开方案文件夹"=>"打开目录","删除自定义方案"=>"删除",_=>title};button.Padding=new Thickness(12,6,12,6);button.MinHeight=34;button.IsEnabled=enabled;ToolTipService.SetToolTip(button,title);tools.Children.Add(button);return button;
         }
         TuningPreset DraftPreset()=>SelectedTuningPreset is{} p?p with{Profile=tuningDraft!.Copy()}:new("user_"+Guid.NewGuid().ToString("N"),"新方案","star",false,tuningDraft!.Copy(),[]);
-        Tool("\uE710","新建方案（复制当前草稿）",async()=>
+        Tool("\uE710","新建手动方案",async()=>
         {
-            string? name=await AskPresetName("新建方案","自定义方案");if(name==null)return;
-            var created=tuningPresetStore.Duplicate(DraftPreset(),name,state);RememberPresetDraft();tuningPresets.Add(created);tuningPresetId=created.Id;tuningDraft=created.Profile.Copy();tuningStatus="方案已保存，尚未应用。";RefreshTuningPanel();
-        });
+            string? name=await AskPresetName("新建手动方案","自定义方案");if(name==null)return;
+            var source=CreateManualTuningSource(state);
+            var created=tuningPresetStore.Duplicate(source,name,state);RememberPresetDraft();tuningPresets.Add(created);tuningPresetId=created.Id;tuningDraft=created.Profile.Copy();tuningStatus="方案已保存，尚未应用。";RefreshTuningPanel();
+        },FactoryBalancedTuningPreset!=null);
         Tool("\uE74E","保存当前方案",async()=>
         {
             var p=DraftPreset();bool create=SelectedTuningPreset==null;if(create){string? name=await AskPresetName("保存方案",p.Name);if(name==null)return;p=p with{Name=name};}
@@ -63,14 +75,14 @@ public sealed partial class MainWindow
         Tool("\uE70F","重命名方案",async()=>
         {
             var p=DraftPreset();string? name=await AskPresetName("重命名方案",p.Name);if(name==null)return;p=p with{Name=name};tuningPresetStore.Save(p,state);tuningPresets[tuningPresets.FindIndex(x=>x.Id==p.Id)]=p;tuningStatus="方案已重命名，未写入硬件。";RefreshTuningPanel();
-        },SelectedTuningPreset?.BuiltIn==false);
+        },SelectedTuningPreset!=null);
         Tool("\uE898","导入 JSON 方案",async()=>
         {
             var picker=new Microsoft.Windows.Storage.Pickers.FileOpenPicker(AppWindow.Id);picker.FileTypeFilter.Add(".json");var file=await picker.PickSingleFileAsync();if(file==null)return;
             if(new FileInfo(file.Path).Length>1024*1024)throw new IOException("方案文件不能超过1MiB。");
             var imported=tuningPresetStore.Import(await File.ReadAllTextAsync(file.Path),state);RememberPresetDraft();tuningPresets.Add(imported);tuningPresetId=imported.Id;tuningDraft=imported.Profile.Copy();tuningStatus="方案已导入并检查，尚未应用。";RefreshTuningPanel();
         });
-        Tool("\uE896","导出 JSON 方案",async()=>{var p=DraftPreset();HardwareSession.ValidateTuning(state,p.Profile);await SaveJsonFile(p.Name+".json",TuningPresetStore.Export(p));});
+        Tool("\uE896","导出 JSON 方案",async()=>{var p=DraftPreset();HardwareSession.ValidateTuningDraft(state,p.Profile);await SaveJsonFile(p.Name+".json",TuningPresetStore.Export(p));});
         Tool("\uE8B7","打开方案文件夹",()=>
         {
             Directory.CreateDirectory(tuningPresetStore.DirectoryPath);var start=new ProcessStartInfo("explorer.exe"){UseShellExecute=true};start.ArgumentList.Add(tuningPresetStore.DirectoryPath);Process.Start(start);return Task.CompletedTask;

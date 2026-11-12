@@ -10,7 +10,7 @@ using Windows.System;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
-    private List<string> overviewSaved=[..OverviewLayout.Load()];
+    private List<string> overviewSaved=[];
     private List<string>? overviewDraft;
     private OverviewBoard? overviewBoard;
     private readonly Dictionary<string,string> tileTitles=new(){["cpu"]="CPU",["gpu"]="GPU",["vram"]="显存",["fan"]="散热",["performance"]="性能模式",["battery"]="电源与电池",["display"]="屏幕"};
@@ -66,7 +66,7 @@ public sealed partial class MainWindow
             var value=Value("battery",24);value.FontWeight=Microsoft.UI.Text.FontWeights.Normal;
             var sub=Value("batteryDetail",12);sub.FontWeight=Microsoft.UI.Text.FontWeights.Normal;
             var limit=Ui.Button("充电上限",(_,_)=>{});var limitText=Value("approvedBatteryLimit",12);limitText.FontWeight=Microsoft.UI.Text.FontWeights.Normal;limit.Content=Ui.Row(Ui.Text("充电上限",12),SettingsControls(limitText,ApprovedIcons.Utility("chevron",13)));SuiteVisuals.Flat(limit);
-            var choices=new MenuFlyout();foreach(int cap in new[]{100,80,60}){var item=new MenuFlyoutItem{Text=$"充电上限 {cap}%"};item.Click+=async(_,_)=>await RunHardware(()=>hardware.ApplyBatteryCommand(cap),hardware.CoreDelegated?"Core 已发送充电上限命令。":"充电上限已回读确认。");choices.Items.Add(item);}limit.Flyout=choices;limit.IsEnabled=hardware.Active&&hardware.SupportsBattery;
+            var choices=new MenuFlyout();foreach(int cap in new[]{100,80,60}){var item=new MenuFlyoutItem{Text=$"充电上限 {cap}%"};item.Click+=async(_,_)=>await SetChargeLimit(cap);choices.Items.Add(item);}limit.Flyout=choices;limit.IsEnabled=hardware.Active&&hardware.SupportsBattery;
             var plan=Ui.Button("Windows 电源计划",(_,_)=>{currentPage="settings";Render();});plan.Content=Ui.Row(Ui.Text("Windows 电源计划",12),ApprovedIcons.Utility("chevron",13));SuiteVisuals.Flat(plan);
             var controls=SuiteVisuals.Rule(SuiteVisuals.Stack(1,limit,plan),4);
             var glance=SettingsControls(MiniBatteryPicture(),value);glance.Spacing=12;
@@ -126,7 +126,7 @@ public sealed partial class MainWindow
             {
                 Button b;
                 if(key is "camera" or "mic" or "win" or "awake" or "screen")b=QuickActionButton(key);
-                else if(key=="boost")b=overviewBoost=Ui.Button("一键强冷",async(_,_)=>await RunHardware(()=>hardware.ApplyFanBoostCommand(!(hardware.State?.FanBoost??ec.FanBoost??hardware.RequestedFanBoost??false)),hardware.CoreDelegated?"Core 已发送强冷命令。":"强冷状态已回读确认。"));
+                else if(key=="boost")b=overviewBoost=Ui.Button("一键强冷",async(_,_)=>await ToggleFanBoost(ec.FanBoost));
                 else b=ExtraSwitchButton(key,key=="touchpad"?"触摸板":key=="fn"?"F1–F12 模式":"OSD 提示","");
                 body.Children.Add(b);
             }

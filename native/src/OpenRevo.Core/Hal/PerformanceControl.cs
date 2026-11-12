@@ -2,7 +2,11 @@ namespace OpenRevo.Core.Hal;
 
 public sealed record PerformanceSnapshot(FanProtocolState Fans, byte Clamp, byte Trigger)
 {
-    public int Mode => (Fans.Custom&1)!=0?4:(Clamp & Vault.ModeClampMask) == 160 ? 1 : (Fans.ModeIndex & Vault.ModeIndexMask) == 16 ? 3 : 2;
+    internal int? OemFactoryMode { get; init; }
+    public int Mode => OemFactoryMode ?? DecodeClassicMode(Fans.Custom, Clamp, Fans.ModeIndex);
+
+    internal static int DecodeClassicMode(byte custom, byte clamp, byte index) =>
+        (custom & 1) != 0 ? 4 : (clamp & Vault.ModeClampMask) == 160 ? 1 : (index & Vault.ModeIndexMask) == 16 ? 3 : 2;
 }
 public sealed record PerformanceReceipt(PerformanceSnapshot Before, PerformanceSnapshot After);
 
@@ -10,8 +14,17 @@ public sealed partial class HardwareSession
 {
     private PerformanceReceipt? lastPerformance;
     public PerformanceSnapshot? PerformanceState { get; private set; }
-    private static PerformanceSnapshot ReadPerformance(IHardwareTransport ec) => new(ReadFanProtocol(ec),
-        ec.Read(Vault.FanClamp) ?? throw new IOException("档位读取失败"), ec.Read(Vault.Trigger) ?? throw new IOException("档位触发状态读取失败"));
+    private PerformanceSnapshot ReadPerformance(IHardwareTransport ec)
+    {
+        var fans = ReadFanProtocol(ec);
+        var clamp = ec.Read(Vault.FanClamp) ?? throw new IOException("档位读取失败");
+        var trigger = ec.Read(Vault.Trigger) ?? throw new IOException("档位触发状态读取失败");
+        var oemMode = fans.Custom == 0 && CanReadGm7tg0mFactoryMode
+            ? Gm7tg0mFactoryMode.Decode(ec.Read(Vault.ProjectId), ec.Read(Vault.PlatformId),
+                fans.Custom, clamp, fans.ModeIndex, fans.Isolated)
+            : null;
+        return new(fans, clamp, trigger) { OemFactoryMode = oemMode };
+    }
     public PerformanceSnapshot ProbePerformance() => Serialized(() =>
     {
         Guard(); using var ec = open(); return PerformanceState = ReadPerformance(ec);
@@ -36,7 +49,7 @@ public sealed partial class HardwareSession
     }
     private FanProtocolState FactoryForMachine(FanProtocolState current,int mode)
     {
-        var template=Factory(current,mode);if(!useCoreAdmission)return template;
+        var template=Factory(current,mode);if(!UsesProductionClassicCore)return template;
         var table=CoreMachine.Library.Read(21,(uint)mode);
         int[] Row(string key){var row=table.GetProperty(key).EnumerateArray().Select(v=>v.GetInt32()).ToArray();if(row.Length!=16||row.Any(v=>v is <0 or >255))throw new IOException("Core风扇表不完整。");return row;}
         var gpu=Row("gpu_duty");gpu[15]=Math.Max(160,gpu[15]);
@@ -92,8 +105,8 @@ public sealed partial class HardwareSession
         Guard(); using var ec = open(); var rootState = Read(ec); var before = ReadPerformance(ec);
         PerformanceDiagnostics=new{phase="preflight",factoryReplacement,rootState,before};
         // A matched classic Core channel defines the write protocol. OEM source table contents
-        // need not equal our target tables when replacing all six rows. Tuning and undo retain
-        // the strict source classifier; isolated fixtures do not gain production admission.
+        // need not equal our target tables when replacing all six rows. Undo retains the
+        // strict source classifier; isolated fixtures do not gain production admission.
         bool replaceOemTable=factoryReplacement&&UsesProductionClassicCore&&Admission.Ready&&Admission.Performance;
         if (!MatchesProject(rootState.Project) || expected==null || rootState.Project!=expected.Project || rootState.Platform!=expected.Platform)
             throw new InvalidOperationException("当前设备或平台状态已变化，未修改性能档位。请重新读取并接管。");
@@ -134,13 +147,11 @@ public sealed partial class HardwareSession
                 var actual=ec.Read(a);
                 if (!actual.HasValue || (actual.Value & ~ignore)!=(value & ~ignore)) throw new IOException("档位回读失败。");
             }
-            // Keep physical cooling clamped until the complete table is committed.
-            Write(Vault.FanClamp,before.Clamp | Vault.FanBoostMask);
             Write(Vault.FanLatch,4); Write(Vault.FanLatch,0); Write(Vault.ApControl,desired.Fans.ApControl);
             var tables=new[] {(Vault.CpuUpBase,desired.Fans.CpuUp),(Vault.CpuDownBase,desired.Fans.CpuDown),(Vault.CpuDutyBase,desired.Fans.CpuDuty),
                 (Vault.GpuUpBase,desired.Fans.GpuUp),(Vault.GpuDownBase,desired.Fans.GpuDown),(Vault.GpuDutyBase,desired.Fans.GpuDutyAndControl)};
             Flush();
-            if(UsesProductionClassicCore)WriteClassicFanTables(rootState.Project,tables);
+            if(UsesProductionClassicCore)WriteClassicFanTables(rootState.Project,tables,factory:true);
             else foreach(var (start,values) in tables) for(int i=0;i<16;i++) Write((ushort)(start+i),values[i]);
             CheckPower();
             Write(Vault.CustomMode,desired.Fans.Custom); Write(Vault.FanIsolated,desired.Fans.Isolated); Write(Vault.FanRamp,desired.Fans.Ramp);
@@ -163,15 +174,8 @@ public sealed partial class HardwareSession
             }
             faulted=true;
             PerformanceDiagnostics=new{phase="failed-stop",factoryReplacement,rootState,before,desired,error=error.Message};
-            bool coolingConfirmed=false;
-            try
-            {
-                if(blocked()==null && ec.Read(Vault.FanClamp) is byte value)
-                { byte cooling=(byte)(value|Vault.FanBoostMask); coolingConfirmed=ec.Write(Vault.FanClamp,cooling) && ec.Read(Vault.FanClamp)==cooling; }
-            }
-            catch { }
-            try { audit(new {at=DateTimeOffset.Now,operation="performance-stopped",coolingConfirmed,error=error.Message}); } catch { }
-            throw new IOException("档位操作已停止；可能部分生效。请保留强冷并重新读取诊断。"+error.Message,error);
+            try { audit(new {at=DateTimeOffset.Now,operation="performance-stopped",error=error.Message}); } catch { }
+            throw new IOException("档位操作已停止；可能部分生效。请重新读取设备状态和诊断。"+error.Message,error);
         }
     });
     private sealed record ClassicControlStep(ushort address,byte value,int ignore);
@@ -183,10 +187,10 @@ public sealed partial class HardwareSession
         steps.Clear();
     }
 
-    private void WriteClassicFanTables(byte project,(ushort Start,int[] Values)[] tables)
+    private void WriteClassicFanTables(byte project,(ushort Start,int[] Values)[] tables,bool factory)
     {
         Guard();
-        CoreMachine.Library.ExecuteFeature(13,new{kind="fan_tables",project,values=tables.SelectMany(table=>table.Values).ToArray()});
+        CoreMachine.Library.ExecuteFeature(13,new{kind="fan_tables",project,factory,values=tables.SelectMany(table=>table.Values).ToArray()});
     }
 
     public PerformanceReceipt UndoPerformance() => Serialized(() =>

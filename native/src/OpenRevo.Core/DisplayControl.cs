@@ -47,14 +47,31 @@ public static class DisplayControl
         InitializeModeBuffer(data);
         return EnumDisplaySettingsW(device, index, data);
     }
+    public static (int Hertz, string Panel) ReadCurrentRefresh()
+    {
+        var mode = ReadCurrentMode();
+        return (mode.Hertz, mode.Panel.Panel);
+    }
+
+    private static (InternalDisplayCandidate Panel, byte[] Buffer, int Width, int Height, int Bits, int Hertz) ReadCurrentMode()
+    {
+        var selected = DisplayTopology.Internal();
+        var buffer = Mode(selected.DeviceName, -1);
+        int width = BitConverter.ToInt32(buffer, 172);
+        int height = BitConverter.ToInt32(buffer, 176);
+        int bits = BitConverter.ToInt32(buffer, 168);
+        int hertz = BitConverter.ToInt32(buffer, 184);
+        DiagnosticLog.Record("display.mode", new { selected, width, height, bits, hertz });
+        if (width <= 0 || height <= 0 || hertz <= 1)
+            throw new IOException("Windows未提供有效的当前内置屏显示模式。");
+        return (selected, buffer, width, height, bits, hertz);
+    }
+
     public static DisplayState Read()
     {
-        var selected=DisplayTopology.Internal();string device=selected.DeviceName;
-        var mode = Mode(device, -1);
+        var (selected, mode, width, height, bits, hertz) = ReadCurrentMode();
+        string device = selected.DeviceName;
         int Get(int offset) => BitConverter.ToInt32(mode, offset);
-        int width = Get(172), height = Get(176), bits = Get(168), hertz = Get(184);
-        DiagnosticLog.Record("display.mode",new{selected,width,height,bits,hertz});
-        if(width<=0||height<=0||hertz<=1)throw new IOException("Windows未提供有效的当前内置屏显示模式。");
         var rates = new SortedSet<int>();
         for (int i = 0; i < 1024 && TryReadMode(device, i, mode); i++)
         {
@@ -65,10 +82,18 @@ public static class DisplayControl
         if(rates.Count==0)rates.Add(hertz);
         return new(width, height, hertz, rates.ToArray(), device,selected.Panel);
     }
-    public static void SetRefresh(int expected, int target)
+    public static void SetRefresh(int expected, int target) => SetRefresh(expected, target, null);
+
+    public static void SetRefresh(DisplayState expectedPanel, int target) =>
+        SetRefresh(expectedPanel.Hertz, target, expectedPanel);
+
+    private static void SetRefresh(int expected, int target, DisplayState? expectedPanel)
     {
         var current = Read();
         if (!current.Active || current.DeviceName.Length == 0) throw new InvalidOperationException("内置屏当前未激活，未更改远程虚拟显示器。");
+        if (expectedPanel != null && (current.DeviceName != expectedPanel.DeviceName || current.Panel != expectedPanel.Panel ||
+            current.Width != expectedPanel.Width || current.Height != expectedPanel.Height))
+            throw new InvalidOperationException("内置屏或当前显示模式已变化，未更改刷新率。");
         if (current.Hertz != expected || !current.Rates.Contains(target)) throw new InvalidOperationException("刷新率已变化，或目标值不受当前屏幕支持。");
         var mode = Mode(current.DeviceName, -1); BitConverter.GetBytes(0x400000).CopyTo(mode, 72); BitConverter.GetBytes(target).CopyTo(mode, 184);
         if (ChangeDisplaySettingsExW(current.DeviceName, mode, IntPtr.Zero, 2, IntPtr.Zero) != 0) throw new IOException("Windows 拒绝此内置屏模式。");

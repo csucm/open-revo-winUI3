@@ -6,11 +6,13 @@ namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
     private OverviewSwitches extraSwitches=new(null,null,null,null);
-    private OverviewTelemetry? overviewTelemetry;
-    private Task<OverviewTelemetry>? overviewTelemetryRead;
+    private OverviewTelemetryCoordinator overviewSampling => hardwareRuntime.Telemetry.Overview;
+    private OverviewTelemetry? overviewTelemetry => residentClient != null ? residentOverviewTelemetry : overviewSampling.ReadState().Sample?.Data;
+    private DateTimeOffset overviewTelemetryAt => (residentClient != null
+        ? residentOverview?.At : overviewSampling.ReadState().Sample?.At)?.ToLocalTime() ?? default;
     private Task<OverviewSwitches>? extraSwitchRead;
     private int extraGeneration,extraReadGeneration;
-    private DateTimeOffset lastOverviewTelemetry,lastExtraSwitchRead,overviewTelemetryAt;
+    private DateTimeOffset lastExtraSwitchRead;
     private readonly Dictionary<string,Button> extraSwitchButtons=[];
     private readonly HashSet<string> extraSwitchBusy=[];
     private ProgressBar? overviewGpuBar,overviewVramBar;
@@ -21,15 +23,11 @@ public sealed partial class MainWindow
     private static uint ExtraOsdKind(string key)=>key switch{"wifi"=>3u,"bluetooth"=>4u,"touchpad"=>5u,"fn"=>9u,_=>0u};
     private void SampleOverviewIntegration()
     {
-        bool active=!mini&&currentPage=="overview"&&IsVisibleNow()&&upstream!=null&&!gpuChanging;
-        bool readSwitches=IsVisibleNow()&&upstream!=null&&!gpuChanging&&
+        var core = upstream;
+        bool canRead = IsVisibleNow() && core != null && !gpuChanging;
+        bool active = canRead && !mini && currentPage == "overview";
+        bool readSwitches=canRead&&
             (active||mini||currentPage is "devices" or "minicustomization");
-        if(overviewTelemetryRead is {IsCompleted:true})
-        {
-            if(overviewTelemetryRead.IsCompletedSuccessfully){overviewTelemetry=overviewTelemetryRead.Result;overviewTelemetryAt=lastOverviewTelemetry;}
-            else if(overviewTelemetryRead.Exception is {} error)DiagnosticLog.Failure("overview.telemetry.read",error,throttle:true);
-            overviewTelemetryRead=null;UpdateOverviewValues();
-        }
         if(extraSwitchRead is {IsCompleted:true})
         {
             if(extraReadGeneration==extraGeneration&&extraSwitchBusy.Count==0)
@@ -41,15 +39,13 @@ public sealed partial class MainWindow
         }
         if(readSwitches&&extraSwitchRead==null&&extraSwitchBusy.Count==0&&!quickBusy&&!hardwareBusy&&!monochromeBusy&&DateTimeOffset.Now-lastExtraSwitchRead>=TimeSpan.FromSeconds(6))
         {lastExtraSwitchRead=DateTimeOffset.Now;extraReadGeneration=extraGeneration;extraSwitchRead=Task.Run(()=>upstream!.ReadOverviewSwitches());}
-        if(!active)return;
-        SampleOverviewPowerTargets();
-        if(overviewTelemetryRead==null&&DateTimeOffset.Now-lastOverviewTelemetry>=TimeSpan.FromSeconds(2))
+        if(!active)
         {
-            lastOverviewTelemetry=DateTimeOffset.Now;
-            bool? discreteDeclared = CoreMachine.Current.DiscreteGpuDeclared;
-            bool gpu = discreteDeclared == false || latest?.OnAc == true && ec.GpuFan is >0;
-            overviewTelemetryRead=Task.Run(()=>upstream!.ReadOverviewTelemetry(gpu, discreteDeclared));
+            overviewSampling.SetForegroundDemand(null);
+            return;
         }
+        SampleOverviewPowerTargets();
+        overviewSampling.SetForegroundDemand(core, CoreMachine.Current.DiscreteGpuDeclared, latest?.OnAc, ec.GpuFan);
         UpdateOverviewValues();
     }
     private Button ExtraSwitchButton(string key,string title,string glyph)
@@ -88,28 +84,18 @@ public sealed partial class MainWindow
     {
         if(closed||upstream==null||extraSwitchBusy.Contains(key))return;
         var kind=ExtraSwitchKind(key);extraGeneration++;extraSwitchBusy.Add(key);UpdateExtraSwitchButtons();
-        await operationQueue.WaitAsync();
-        if(closed){extraSwitchBusy.Remove(key);operationQueue.Release();return;}
-        quickBusy=true;
         try
         {
-            extraSwitches=await Task.Run(upstream.ReadOverviewSwitches);
-            bool before=extraSwitches.Get(kind)??throw new IOException("设备当前状态不可用。");
-            extraSwitches=await Task.Run(()=>
-            {
-                if(kind is OverviewSwitch.Touchpad or OverviewSwitch.FnLock)return hardware.SetOverviewSwitchViaCore(upstream,kind,before,!before);
-                upstream.SetOverviewSwitch(kind,before,!before);return upstream.ReadOverviewSwitches();
-            });
-            if(extraSwitches.Get(kind)!=!before)throw new IOException("设备回读未确认改变。");
+            extraSwitches=await hardwareRuntime.Switches.ToggleOverviewAsync(kind);
             uint feature=ExtraOsdKind(key);
-            if(feature!=0)ConfirmShortcutOsd(feature,before?0u:1u);
+            if(feature!=0&&extraSwitches.Get(kind) is bool confirmed)ConfirmShortcutOsd(feature,confirmed?1u:0u);
         }
         catch(Exception error)
         {
-            try{extraSwitches=await Task.Run(upstream.ReadOverviewSwitches);}catch{extraSwitches=new(null,null,null,null);}
+            try{extraSwitches=await Task.Run(hardwareRuntime.Switches.ReadOverview);}catch{extraSwitches=new(null,null,null,null);}
             actions.Add(error.Message);if(!closed)await ShowMessage("设置未完成",error.Message);
         }
-        finally{quickBusy=false;lastExtraSwitchRead=DateTimeOffset.Now;extraSwitchBusy.Remove(key);operationQueue.Release();if(!closed){UpdateExtraSwitchButtons();UpdateControlValues();}}
+        finally{lastExtraSwitchRead=DateTimeOffset.Now;extraSwitchBusy.Remove(key);if(!closed){UpdateExtraSwitchButtons();UpdateControlValues();}}
     }
     private void ObserveOsd(uint feature,uint value)
     {
@@ -161,7 +147,7 @@ public sealed partial class MainWindow
     {
         if(hardware.CurrentMode is int mode&&mode is >=1 and <=4)ObserveOsd(1,(uint)mode);
         if((hardware.State?.FanBoost??ec.FanBoost)is bool boost)ObserveOsd(2,boost?1u:0u);
-        foreach(var(feature,state)in new[]{(6u,quickState.Camera),(7u,quickState.Microphone),(8u,quickState.WinLocked),(10u,(bool?)(sessionPower?.Enabled==true))})if(state.HasValue)ObserveOsd(feature,state.Value?1u:0u);
+        foreach(var(feature,state)in new[]{(6u,quickState.Camera),(7u,quickState.Microphone),(8u,quickState.WinLocked),(10u,(bool?)(keepAwakeEnabled))})if(state.HasValue)ObserveOsd(feature,state.Value?1u:0u);
     }
 }
 

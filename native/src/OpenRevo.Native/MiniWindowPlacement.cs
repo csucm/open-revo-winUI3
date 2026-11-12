@@ -5,12 +5,14 @@ namespace OpenRevo.Native;
 
 public sealed partial class MainWindow
 {
+    private const double MiniEdgeMarginDip = 6;
+
     private void PositionMiniAtBottomRight()
     {
         if(closed||!mini)return;
         var area=DisplayArea.GetFromWindowId(AppWindow.Id,DisplayAreaFallback.Primary).WorkArea;
         double scale=GetDpiForWindow(captionWindow)/96d;if(scale<=0)scale=1;
-        int margin=(int)Math.Round(12*scale);
+        int margin=(int)Math.Round(MiniEdgeMarginDip*scale);
         var size=AppWindow.Size;
         var point=new PointInt32(Math.Max(area.X,area.X+area.Width-size.Width-margin),
             Math.Max(area.Y,area.Y+area.Height-size.Height-margin));

@@ -3,16 +3,40 @@ use serde_json::{json,Value};
 use openrevo_core::hal::traits::HardwareDriver;
 use openrevo_core::{hal,driver::wmi_ec as ec};
 
+// 0x07B9 bit 7 is a volatile reached flag, not part of the percentage.
+const BATTERY_PERCENT_MASK: u8 = 0x7f;
+const BATTERY_REACHED_MASK: u8 = 0x80;
+
+fn battery_mode_matches(project: u8, upper: u8, lower: u8, expected: u8, actual: u8) -> bool {
+    if expected == actual { return true; }
+    let preset = match (upper & BATTERY_PERCENT_MASK, lower) {
+        (60, 55) => 0x21,
+        (80, 75) => 0x11,
+        _ => return false,
+    };
+    // Project 26 retains its thresholds when firmware resets the selector.
+    // Other mode bits, other projects and unrelated selectors stay exact.
+    project == 26 && (expected ^ actual) & !0x31 == 0
+        && matches!(expected & 0x31, v if v == 1 || v == preset)
+        && matches!(actual & 0x31, v if v == 1 || v == preset)
+}
 
 pub(super) fn classic()->bool {
     hal::platform_probe::is_tongfang_family() && !ec::is_legacy_dual_mode_ec()
         && hal::declarative::load_matched_manifest().map(|m|m.channels.values().all(|c|matches!(c,hal::declarative::model_manifest::ChannelDef::AcpiIoctl{..}))).unwrap_or(true)
 }
 pub(super) fn project()->Option<u8>{if classic(){ec::wmi_read_ec(ec::ADDR_PROJECT_ID).filter(|p|*p!=0&&*p!=255)}else{None}}
-fn declared_mode() -> Option<u8> {
+pub(super) fn declared_mode() -> Option<u8> {
     hal::get_hardware_driver().read_live_performance_mode().map(|mode| mode as u8)
 }
+fn classic_cpu_tuning_allowed(caps: Option<&hal::declarative::model_manifest::ModelCapabilities>) -> bool {
+    caps.and_then(|c|c.cpu_tuning_type.as_deref())!=Some("none")
+}
 pub(super) fn probe()->Value {
+    probe_with_mode_sample(false)
+}
+
+pub(super) fn probe_with_mode_sample(include_oem_mode: bool) -> Value {
     let channel=hal::platform_probe::get_platform_channel();
     let manifest=hal::declarative::load_matched_manifest();
     let classic=classic();let pid=project();
@@ -26,15 +50,40 @@ pub(super) fn probe()->Value {
     let ready=driver.kind()!=hal::traits::DriverKind::Mock&&physical;
     let flags=if classic&&ready{Some(ec::get_hardware_support_flags())}else{None};
     let caps=manifest.as_ref().map(|m|&m.capabilities);
-    let battery_contract=classic&&matches!((ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_UP),ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_DOWN),ec::wmi_read_ec(ec::ADDR_BATTERY_PROTECTION_MODE)),(Some(60),Some(55),Some(v))if v&0x31==0x21)
-        ||classic&&matches!((ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_UP),ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_DOWN),ec::wmi_read_ec(ec::ADDR_BATTERY_PROTECTION_MODE)),(Some(80),Some(75),Some(v))if v&0x31==0x11)
-        ||classic&&matches!((ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_UP),ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_DOWN),ec::wmi_read_ec(ec::ADDR_BATTERY_PROTECTION_MODE)),(Some(100),Some(95),Some(v))if v&0x31==1)
-        // Verified Project 16 keeps its exact preset thresholds when firmware
-        // resets the selector to LongLife (observed 60/55 with mode 0x09).
-        // Do not infer other projects' write support from threshold bytes alone.
-        ||classic&&pid==Some(16)&&matches!((ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_UP),ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_DOWN),ec::wmi_read_ec(ec::ADDR_BATTERY_PROTECTION_MODE)),
-            (Some(60),Some(55),Some(v))|(Some(80),Some(75),Some(v))if v&0x31==1);
-    let mode=if classic {ec::wmi_read_ec(ec::ADDR_FAN_BOOST_CLAMP).and_then(|clamp|ec::wmi_read_ec(ec::ADDR_CUSTOM_MODE).and_then(|custom|ec::wmi_read_ec(ec::ADDR_MODE_INDEX).map(|index|if custom&1!=0{4}else if clamp&0xb0==0xa0{1}else if index&0x1e==0x10{3}else{2})))}else if ready {live_mode}else{None};
+    let classic_cpu_tuning=classic&&ready&&classic_cpu_tuning_allowed(caps);
+    let battery_contract = classic
+        && match (
+            ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_UP).map(|v| v & BATTERY_PERCENT_MASK),
+            ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_DOWN),
+            ec::wmi_read_ec(ec::ADDR_BATTERY_PROTECTION_MODE).map(|v| v & 0x31),
+        ) {
+            (Some(60), Some(55), Some(0x21))
+            | (Some(80), Some(75), Some(0x11))
+            | (Some(100), Some(95), Some(1)) => true,
+            // Projects 16 and 26 can retain their exact preset thresholds
+            // after firmware resets the selector to LongLife.
+            (Some(60), Some(55), Some(1)) | (Some(80), Some(75), Some(1)) => {
+                matches!(pid, Some(16 | 26))
+            }
+            _ => false,
+        };
+    let classic_mode = if classic {
+        ec::wmi_read_ec(ec::ADDR_FAN_BOOST_CLAMP).and_then(|clamp| {
+            ec::wmi_read_ec(ec::ADDR_CUSTOM_MODE).and_then(|custom| {
+                ec::wmi_read_ec(ec::ADDR_MODE_INDEX).map(|index| (clamp, custom, index))
+            })
+        })
+    } else {
+        None
+    };
+    let mode = if classic {
+        classic_mode.map(|(clamp, custom, index)| {
+            if custom & 1 != 0 { 4 }
+            else if clamp & 0xb0 == 0xa0 { 1 }
+            else if index & 0x1e == 0x10 { 3 }
+            else { 2 }
+        })
+    } else if ready { live_mode } else { None };
     let declared_battery = !classic && manifest.as_ref().is_some_and(|m|
         m.capabilities.battery_charge_limit && matches!(m.actions.get("set_battery_limit"), Some(hal::declarative::model_manifest::ActionDef::BufferInvoke { .. })));
     let declared_boost = !classic && manifest.as_ref().is_some_and(|m|
@@ -55,13 +104,21 @@ pub(super) fn probe()->Value {
             || m.channels.values().any(|c| matches!(c, hal::declarative::model_manifest::ChannelDef::WmiIp3)));
     let supported=channel!=hal::platform_probe::PlatformChannelKind::Unknown||manifest.is_some();
     let reason=if ready{"Core驱动通道已连接"}else if supported{"Core已识别平台，但硬件通道未响应；请检查驱动和管理员权限"}else{"原Core未识别到可用的硬件驱动通道"};
-    json!({"supported":supported,"ready":ready,"classic_ec":classic,"channel":format!("{:?}",channel),"driver":driver.name(),"manifest":manifest.as_ref().map(|m|&m.id),"project":pid,"reason":reason,
-      "mode":mode,"cpu_fan":fans.map(|v|v.0),"gpu_fan":fans.map(|v|v.1),"discrete_gpu":caps.map(|c|c.discrete_gpu),
+    let mut result = json!({"supported":supported,"ready":ready,"classic_ec":classic,"channel":format!("{:?}",channel),"driver":driver.name(),"manifest":manifest.as_ref().map(|m|&m.id),"project":pid,"reason":reason,
+      "mode":mode,"cpu_fan":fans.map(|v|v.0),"gpu_fan":fans.map(|v|v.1),"discrete_gpu":caps.map(|c|c.discrete_gpu),"classic_cpu_tuning":classic_cpu_tuning,
       "fan_boost":if classic{Some(ec::is_fan_boost_active())}else{None},
       "fn_lock_via_ec":manifest.as_ref().is_some_and(|m|m.capabilities.fn_lock_via_ec),"fn_lock_readback":super::native_overview::declared_fn_readback(),"keyboard":keyboard,"declared_tuning":tuning,"power_mode_watts":caps.and_then(|c|c.power_mode_watts.as_ref()),"declared_rgb":ready&&declared_rgb,"monochrome_control":monochrome_control,
       "touchpad_control":ready&&!classic&&manifest.as_ref().map(|m|["switch_touchpad_on","switch_touchpad_off"].iter().all(|key|matches!(m.actions.get(*key),Some(hal::declarative::model_manifest::ActionDef::BufferInvoke{..})))).unwrap_or(false),
       "capabilities":{"performance":ready&&mode.is_some()&&(classic||manifest.as_ref().map(|m|m.actions.contains_key("set_power_mode")).unwrap_or(false)),"battery":declared_battery||classic&&(flags.map(|f|f.has_battery_limit).unwrap_or(false)||battery_contract),"fan_boost":declared_boost||classic&&flags.map(|f|f.has_fan_boost).unwrap_or(false),"fn_lock":declared_fn||manifest.as_ref().is_some_and(|m|m.capabilities.fn_lock_via_ec)||classic&&flags.map(|f|f.has_fn_lock).unwrap_or(false),"rgb":classic&&flags.map(|f|f.is_rgb_keyboard).unwrap_or(false),"custom_tuning":classic&&ready&&caps.map(|c|c.fan_custom_curve).unwrap_or(true)},
-      "cpu_encoding":if openrevo_core::driver::uefi_nvram::get_cpu_info().1{"amd_celsius"}else{"intel_offset"},"tj_max":openrevo_core::system::cpu_monitor::get_cpu_native_tjmax()})
+      "cpu_encoding":if openrevo_core::driver::uefi_nvram::get_cpu_info().1{"amd_celsius"}else{"intel_offset"},"tj_max":openrevo_core::system::cpu_monitor::get_cpu_native_tjmax()});
+    if let (true, Some(16), Some((clamp, 0, index))) = (include_oem_mode && ready, pid, classic_mode) {
+        result["oem_mode_clamp"] = json!(clamp);
+        result["oem_mode_custom"] = json!(0);
+        result["oem_mode_index"] = json!(index);
+        result["oem_mode_platform"] = json!(ec::wmi_read_ec(ec::ADDR_PLATFORM_REAL_ID));
+        result["oem_mode_isolated"] = json!(ec::wmi_read_ec(ec::ADDR_FAN_ISOLATED));
+    }
+    result
 }
 
 // Only registers already used by the Native session are exposed. No arbitrary
@@ -160,6 +217,7 @@ pub extern "C" fn or_native_win_lock(value: i32) -> i32 {
                 Ok(()) => i32::from(win_key_hook::is_locked()),
                 Err(_) => -4,
             },
+            2 => win_key_hook::toggle_locked().map(i32::from).unwrap_or(-4),
             _ => -5,
         }
     }).unwrap_or(-2)
@@ -228,6 +286,7 @@ pub(super) fn apply_classic_transaction(request: Value) -> Result<(), String> {
     if request["kind"] == "fan_controls" { return write_classic_fan_controls(&request); }
     if request["kind"] == "fan_tables" { return write_classic_fan_tables(&request); }
     let mut writes: Vec<(u16, u8, u8, u8)> = Vec::new();
+    let mut battery_thresholds = None;
     match request["kind"].as_str() {
         Some("battery") => {
             let (upper, lower, mode) = (number("upper")?, number("lower")?, number("mode")?);
@@ -235,7 +294,8 @@ pub(super) fn apply_classic_transaction(request: Value) -> Result<(), String> {
             if !(40..=100).contains(&upper) || lower > upper || (mode ^ old_mode) & !49 != 0 {
                 return Err("Invalid battery preset".into());
             }
-            let first = (ec::ADDR_BATTERY_LIMIT_UP, old_upper, upper, 0);
+            battery_thresholds = Some((old_upper, old_lower, upper, lower));
+            let first = (ec::ADDR_BATTERY_LIMIT_UP, old_upper, upper, BATTERY_REACHED_MASK);
             let second = (ec::ADDR_BATTERY_LIMIT_DOWN, old_lower, lower, 0);
             writes.extend(if upper < old_lower { [second, first] } else { [first, second] });
             writes.push((ec::ADDR_BATTERY_PROTECTION_MODE, old_mode, mode, 0));
@@ -257,8 +317,17 @@ pub(super) fn apply_classic_transaction(request: Value) -> Result<(), String> {
         _ => return Err("Unknown classic EC transaction".into()),
     }
 
+    let matches = |address, actual: u8, expected: u8, ignore: u8, readback| {
+        if address == ec::ADDR_BATTERY_PROTECTION_MODE {
+            if let Some((old_upper, old_lower, upper, lower)) = battery_thresholds {
+                let (limit, start) = if readback { (upper, lower) } else { (old_upper, old_lower) };
+                return battery_mode_matches(project_id, limit, start, expected, actual);
+            }
+        }
+        actual & !ignore == expected & !ignore
+    };
     for &(address, expected, _, ignore) in &writes {
-        if read(address)? & !ignore != expected & !ignore {
+        if !matches(address, read(address)?, expected, ignore, false) {
             return Err(format!("EC state changed at {address:#06x}"));
         }
     }
@@ -266,7 +335,7 @@ pub(super) fn apply_classic_transaction(request: Value) -> Result<(), String> {
     for (address, expected, target, ignore) in writes {
         let mut conflict = false;
         let written = ec::wmi_modify_ec(address, |current| {
-            conflict = current & !ignore != expected & !ignore;
+            conflict = !matches(address, current, expected, ignore, false);
             if conflict { current } else { target }
         });
         if conflict { return Err(format!("EC state changed at {address:#06x}")); }
@@ -274,7 +343,7 @@ pub(super) fn apply_classic_transaction(request: Value) -> Result<(), String> {
         let mut confirmed = false;
         for attempt in 0..attempts {
             if attempt > 0 { std::thread::sleep(std::time::Duration::from_millis(20)); }
-            if ec::wmi_read_ec(address).is_some_and(|value| value & !ignore == target & !ignore) {
+            if ec::wmi_read_ec(address).is_some_and(|value| matches(address, value, target, ignore, true)) {
                 confirmed = true;
                 break;
             }
@@ -284,15 +353,33 @@ pub(super) fn apply_classic_transaction(request: Value) -> Result<(), String> {
     Ok(())
 }
 
+fn matches_classic_factory_table(values: &[u8], mode: u8) -> bool {
+    let mut table = openrevo_core::system::power::get_mode_fan_table(mode);
+    table.gpu_duty[15] = table.gpu_duty[15].max(160);
+    let rows = [table.cpu_upt, table.cpu_downt, table.cpu_duty,
+        table.gpu_upt, table.gpu_downt, table.gpu_duty];
+    values.chunks(16).eq(rows.iter().map(|row| row.as_slice()))
+}
+
 fn write_classic_fan_tables(request: &Value) -> Result<(), String> {
     const START: u16 = 3840;
     const COUNT: usize = 96;
+    let factory = request["factory"].as_bool().ok_or("Invalid EC fan table type")?;
     let values = request["values"].as_array().filter(|values| values.len() == COUNT)
         .ok_or("Invalid EC fan table length")?;
     let targets: Vec<u8> = values.iter().map(|value| {
         value.as_u64().and_then(|n| u8::try_from(n).ok()).ok_or("Invalid EC fan table byte")
     }).collect::<Result<_,_>>()?;
-    if ec::wmi_read_ec(ec::ADDR_FAN_BOOST_CLAMP).is_none_or(|value| value & 64 == 0) {
+    if factory {
+        if !(1..=3).any(|mode| matches_classic_factory_table(&targets, mode)) {
+            return Err("EC fan table is not a factory table for the current model".into());
+        }
+        if ec::wmi_read_ec(ec::ADDR_FAN_TABLE_LATCH) != Some(0)
+            || ec::wmi_read_ec(ec::ADDR_AP_OEM_BYTE).is_none_or(|value| value & 129 != 129)
+        {
+            return Err("EC factory fan table staging is not ready".into());
+        }
+    } else if ec::wmi_read_ec(ec::ADDR_FAN_BOOST_CLAMP).is_none_or(|value| value & ec::FAN_BOOST_CLAMP_BIT == 0) {
         return Err("EC cooling clamp is not active".into());
     }
     for (offset, target) in targets.into_iter().enumerate() {
@@ -324,6 +411,10 @@ fn write_classic_fan_controls(request: &Value) -> Result<(), String> {
         if ignore & !allowed_mask != 0 { return Err("Invalid EC control readback mask".into()); }
         writes.push((address, value, ignore));
     }
+    if writes.iter().any(|(address,_,_)|matches!(*address,1923..=1926))
+        && !classic_cpu_tuning_allowed(hal::declarative::load_matched_manifest().as_ref().map(|m|&m.capabilities)) {
+        return Err("CPU tuning is disabled by the matched hardware manifest".into());
+    }
     for (address, value, ignore) in writes {
         if ec::wmi_modify_ec(address, |_| value) != Some(value) {
             return Err(format!("EC control write failed at {address:#06x}"));
@@ -348,12 +439,7 @@ pub unsafe extern "C" fn or_native_classic_fan_protocol(
         let [cpu_up, cpu_down, cpu_duty, gpu_up, gpu_down, gpu_duty] =
             std::array::from_fn::<_, 6, _>(|i| &snapshot[i * 16..(i + 1) * 16]);
         let (custom, latch, ap, isolated) = (snapshot[96], snapshot[97], snapshot[98], snapshot[99]);
-        let matches_factory = |mode| {
-            let mut table = openrevo_core::system::power::get_mode_fan_table(mode);
-            table.gpu_duty[15] = table.gpu_duty[15].max(160);
-            cpu_up == table.cpu_upt && cpu_down == table.cpu_downt && cpu_duty == table.cpu_duty
-                && gpu_up == table.gpu_upt && gpu_down == table.gpu_downt && gpu_duty == table.gpu_duty
-        };
+        let matches_factory = |mode| matches_classic_factory_table(&snapshot[..96], mode);
         let control_ready = latch == 4 && ap & 129 == 129;
         let valid = if factory_target == 1 {
             custom == 64 && control_ready && (1..=3).any(matches_factory)

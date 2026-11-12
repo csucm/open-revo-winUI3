@@ -17,12 +17,17 @@ public sealed partial class MainWindow
     private string tuningReturnPage="display";
     private bool tuningReturnMini;
     private string TuningReturnLabel=>tuningReturnMini?"Mini 面板":tuningReturnPage=="overview"?"状态总览":"显卡与屏幕";
-    private void OpenTuning()
+    private void OpenTuning() => OpenTuning(readAutomatically: true);
+    private void OpenTuning(bool readAutomatically)
     {
-        if(!customTuningOpen){tuningReturnPage=currentPage;tuningReturnMini=mini;}
+        bool entering=!customTuningOpen;
+        if(entering){tuningReturnPage=currentPage;tuningReturnMini=mini;}
         currentPage="display";customTuningOpen=true;colorTuningOpen=false;
         if(mini)ToggleMini();else Render();
         tuningPanel?.StartBringIntoView();
+        if(readAutomatically&&entering&&!uiReviewMode&&(residentClient!=null||
+            (tuningBaseline==null||rejectedTuningRegisters!=null)&&hardware.DeclaredCpuTuning==null))
+            _=PaintReadTuning(automatic:true);
     }
     private FrameworkElement TuningEditor()
     {
@@ -83,36 +88,33 @@ public sealed partial class MainWindow
             Number("持续功耗 PL1",p.Pl1,15,state.Pl1Max,"W",v=>tuningDraft=tuningDraft! with{Pl1=v}),
             Number("短时功耗 PL2",p.Pl2,15,state.Pl2Max,"W",v=>tuningDraft=tuningDraft! with{Pl2=v}),
             Number("瞬时功耗 PL4",p.Pl4,35,state.Pl4Max,"W",v=>tuningDraft=tuningDraft! with{Pl4=v}));cpu.Spacing=8;
-        var temperature=Number("温度墙",p.TemperatureC,80,95,"°C",v=>tuningDraft=tuningDraft! with{TemperatureC=v});temperature.IsEnabled=p.TemperatureEnabled;
-        cpu.Children.Add(Toggle("自定义温度墙",p.TemperatureEnabled,v=>{tuningDraft=tuningDraft! with{TemperatureEnabled=v};temperature.IsEnabled=v;}));cpu.Children.Add(temperature);
+        var temperature=Number("温度墙",p.TemperatureC,80,95,"°C",v=>tuningDraft=tuningDraft! with{TemperatureC=v});
+        cpu.Children.Add(Toggle("自定义温度墙",p.TemperatureEnabled,v=>tuningDraft=tuningDraft! with{TemperatureEnabled=v}));cpu.Children.Add(temperature);
         cpu.Children.Add(Ui.Text("PL1 ≤ PL2；PL4 ≥ PL2 + 20W。",11,muted:true));
         FrameworkElement gpu;
         var caps=state.Gpu.Capabilities;
         if(caps.Supported)
         {
             var manual=new TuningSection{Spacing=8};
-            var baseControl=Number("基础功耗",p.GpuBaseWatts,caps.FloorWatts,caps.BaseMaxWatts,"W",v=>tuningDraft=tuningDraft! with{GpuBaseWatts=v});baseControl.IsEnabled=caps.ConfigurableBase;manual.Children.Add(baseControl);
-            var dbValue=Number("动态增强上限",p.GpuBoostWatts,5,caps.BoostMaxWatts,"W",v=>tuningDraft=tuningDraft! with{GpuBoostWatts=v});dbValue.IsEnabled=p.GpuBoostEnabled;
-            manual.Children.Add(Toggle("Dynamic Boost",p.GpuBoostEnabled,v=>{tuningDraft=tuningDraft! with{GpuBoostEnabled=v};dbValue.IsEnabled=v;}));manual.Children.Add(dbValue);
+            if(caps.ConfigurableBase)
+                manual.Children.Add(Number("基础功耗",p.GpuBaseWatts,caps.FloorWatts,caps.BaseMaxWatts,"W",v=>tuningDraft=tuningDraft! with{GpuBaseWatts=v}));
+            var dbValue=Number("动态增强上限",p.GpuBoostWatts,5,caps.BoostMaxWatts,"W",v=>tuningDraft=tuningDraft! with{GpuBoostWatts=v});
+            manual.Children.Add(Toggle("Dynamic Boost",p.GpuBoostEnabled,v=>tuningDraft=tuningDraft! with{GpuBoostEnabled=v}));manual.Children.Add(dbValue);
             var clocks=new TuningSection{Spacing=8};
             var coreControl=Number("核心频率偏移",Math.Clamp(p.Offsets?.CoreMhz??0,0,caps.CoreOffsetMax),0,caps.CoreOffsetMax,"MHz",v=>tuningDraft=tuningDraft! with{Offsets=(tuningDraft!.Offsets??new(0,0)) with{CoreMhz=v}});
             var memoryControl=Number("显存频率偏移",Math.Clamp(p.Offsets?.MemoryMhz??0,0,caps.MemoryOffsetMax),0,caps.MemoryOffsetMax,"MHz",v=>tuningDraft=tuningDraft! with{Offsets=(tuningDraft!.Offsets??new(0,0)) with{MemoryMhz=v}});
-            coreControl.IsEnabled=caps.CoreOffsetMax>0;memoryControl.IsEnabled=caps.MemoryOffsetMax>0;clocks.Children.Add(coreControl);clocks.Children.Add(memoryControl);clocks.IsEnabled=p.GpuSuperPerformance&&p.Offsets!=null;manual.IsEnabled=!p.GpuSuperPerformance;
-            var super=Toggle("超级性能",p.GpuSuperPerformance,v=>
-            {
-                tuningDraft=tuningDraft! with{GpuSuperPerformance=v};manual.IsEnabled=!v;clocks.IsEnabled=v&&state.Gpu.Offsets!=null;
-                if(!v&&tuningDraft.Offsets!=null){tuningDraft=tuningDraft with{Offsets=new(0,0)};syncing=true;foreach(var box in DescendantNumbers(coreControl).Concat(DescendantNumbers(memoryControl)))box.Value=0;syncing=false;}
-            });
-            gpu=Ui.Stack(Ui.Text(caps.Name,11,muted:true),super,manual,clocks,Ui.Text(p.Offsets==null?"驱动未提供频率偏移读数。":"超级性能使用硬件最高功耗额度，并允许频率编辑。",11,muted:true));((StackPanel)gpu).Spacing=8;
+            coreControl.IsEnabled=caps.CoreOffsetMax>0;memoryControl.IsEnabled=caps.MemoryOffsetMax>0;clocks.Children.Add(coreControl);clocks.Children.Add(memoryControl);clocks.IsEnabled=p.Offsets!=null;
+            var super=Toggle("超级性能",p.GpuSuperPerformance,v=>tuningDraft=tuningDraft! with{GpuSuperPerformance=v});
+            gpu=Ui.Stack(Ui.Text(caps.Name,11,muted:true),super,manual,clocks,Ui.Text(p.Offsets==null?"驱动未提供频率偏移读数。":"超级性能使用硬件最高功耗额度，频率偏移在开启时生效。",11,muted:true));((StackPanel)gpu).Spacing=8;
         }
         else gpu=Ui.Text("未读到可确认的显卡能力。本次应用保留显卡参数。",12,muted:true);
         var pair=TuningColumns(ReplicaCard("cpu","CPU 参数",cpu),ReplicaCard("gpu","GPU 参数",gpu));editors.Children.Add(pair);
         var curveGrid=TuningColumns(
             CurvePanel("CPU 风扇曲线",new FanCurveEditor(p.CpuCurve,v=>{tuningDraft=tuningDraft! with{CpuCurve=v};Changed();},tuningNumbers)),
-            CurvePanel("GPU 风扇曲线",new FanCurveEditor(p.GpuCurve,v=>{tuningDraft=tuningDraft! with{GpuCurve=v};Changed();},tuningNumbers,true)));var curves=new ContentControl{Content=curveGrid,HorizontalContentAlignment=HorizontalAlignment.Stretch,IsEnabled=p.CustomFans};
-        var step=Number("每级响应时间",p.FanStepMs,100,12700,"ms",v=>tuningDraft=tuningDraft! with{FanStepMs=v},100);step.IsEnabled=p.SmoothFans;
-        var fanSwitch=Toggle("自定义风扇曲线",p.CustomFans,v=>{tuningDraft=tuningDraft! with{CustomFans=v};curves.IsEnabled=v;});
-        var smooth=Toggle("平滑调速",p.SmoothFans,v=>{tuningDraft=tuningDraft! with{SmoothFans=v};step.IsEnabled=v;});
+            CurvePanel("GPU 风扇曲线",new FanCurveEditor(p.GpuCurve,v=>{tuningDraft=tuningDraft! with{GpuCurve=v};Changed();},tuningNumbers,true)));var curves=new ContentControl{Content=curveGrid,HorizontalContentAlignment=HorizontalAlignment.Stretch};
+        var step=Number("每级响应时间",p.FanStepMs,100,12700,"ms",v=>tuningDraft=tuningDraft! with{FanStepMs=v},100);
+        var fanSwitch=Toggle("自定义风扇曲线",p.CustomFans,v=>tuningDraft=tuningDraft! with{CustomFans=v});
+        var smooth=Toggle("平滑调速",p.SmoothFans,v=>tuningDraft=tuningDraft! with{SmoothFans=v});
         var options=TuningColumns(smooth,step);
         var fans=Ui.Stack(curves,options,Ui.Text("温度递增、转速不下降；最迟95°C达到100%。关闭自定义曲线则使用工厂狂暴风扇表。",11,muted:true));fans.Spacing=8;
         editors.Children.Add(ReplicaCard("fan","风扇曲线与响应",fans,fanSwitch));
@@ -122,12 +124,12 @@ public sealed partial class MainWindow
             try
             {
                 if(tuningNumbers.Any(n=>double.IsNaN(n.Value)||n.Value!=Math.Round(n.Value)))throw new ArgumentException("请填写完整的整数参数。");
-                HardwareSession.ValidateTuning(state,tuningDraft);
-                var requested=tuningDraft.Copy();tuningApplying=true;editors.IsEnabled=false;read.IsEnabled=false;presetToolbar.IsEnabled=false;
+                var draft=tuningDraft.Copy();
+                tuningApplying=true;editors.IsEnabled=false;read.IsEnabled=false;presetToolbar.IsEnabled=false;
                         status.Text="正在应用并核验…";
-                await RunHardware(()=>hardware.ApplyTuning(upstream,state,requested),"极客调校已应用并回读确认。");
-                if(hardware.Active&&hardware.TuningState is {} after&&!ReferenceEquals(after,state))
-                {tuningBaseline=after;tuningDraft=hardware.TuningDraft(after);RememberPresetDraft();tuningStatus="极客调校已应用并回读确认。";}
+                var result=await RunPerformance(()=>performance.ApplyTuningAsync(state,draft),"极客调校已应用并回读确认。");
+                if(result.Tuning is {After:var after})
+                {tuningBaseline=after;tuningDraft=hardware.TuningDraft(after) with{Offsets=draft.Offsets};RememberPresetDraft();tuningStatus="极客调校已应用并回读确认。";}
                 else tuningStatus="应用未完成，请重新读取当前硬件状态。";
             }
             catch(Exception error){tuningStatus=error.Message;}
@@ -138,12 +140,6 @@ public sealed partial class MainWindow
         var dock=Ui.Card(DesktopAlignedRow(status,SettingsControls(read,apply)));dock.Padding=new Thickness(16,12,16,12);dock.CornerRadius=new CornerRadius(12);
         host.Children.Add(dock);
         editors.IsEnabled=presetToolbar.IsEnabled=!tuningApplying;
-    }
-    private static IEnumerable<NumberBox> DescendantNumbers(UIElement element)
-    {
-        if(element is NumberBox number)yield return number;
-        int count=Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(element);
-        for(int i=0;i<count;i++)if(Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(element,i) is UIElement child)foreach(var item in DescendantNumbers(child))yield return item;
     }
 }
 internal sealed class TuningSection:ContentControl

@@ -1,6 +1,8 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
 using OpenRevo.Core;
 using OpenRevo.Core.Hal;
 using System.Text.Json;
@@ -55,7 +57,7 @@ public sealed partial class MainWindow
             finally{AppWindow.Show(false);}
             await File.WriteAllTextAsync(Path.Combine(AppContext.BaseDirectory,"painted-osd-review.json"),JsonSerializer.Serialize(new{passed,syntheticCapsEvents=true,results}));
             var fans=new FanProtocolState(new int[16],new int[16],new int[16],new int[16],new int[16],new int[16],4,129,16,0,65,128,10);tuningBaseline=new(new(fans,0,0),new(65,90,140,10,2,0,25,0,115,135,185,10,35,55,90,65,90,140),new(new("Isolated layout fixture",true,true,60,115,25,250,1000),new(0,0)),100);tuningDraft=tuningBaseline.CreateDraft();tuningStatus="隔离布局样本，未连接硬件。";
-            colorDraft=JsonNode.Parse("{\"id\":\"layout-fixture\",\"name\":\"隔离布局样本\",\"color_temp_k\":6500,\"saturation\":1,\"contrast\":1,\"gamma\":1,\"gain_r\":1,\"gain_g\":1,\"gain_b\":1}")!.AsObject();
+            colorDraft=ColorPreset.Parse("{\"id\":\"layout-fixture\",\"name\":\"隔离布局样本\",\"color_temp_k\":6500,\"saturation\":1,\"contrast\":1,\"gamma\":1,\"gain_r\":1,\"gain_g\":1,\"gain_b\":1}");
             root.RequestedTheme=ElementTheme.Light;PaintNavigate("overview");await Settle();
             foreach(var theme in new[]{ElementTheme.Light,ElementTheme.Dark})
             foreach(string speed in new[]{"fast","normal","slow"})
@@ -111,14 +113,23 @@ public sealed partial class MainWindow
                 foreach(string route in new[]{"overview","display","power","sleep","devices","lightingzone","plugins","settings","osdsettings","storage","diagnostics","tuning","color"})
                 {
                     selectedLightingZone="keyboard";PaintNavigate(route);await Settle();UpdateOverviewValues();UpdateOverviewPowerTarget();RefreshPaintedState();await Settle();
-                    var stock=DetailDescendants(page).Where(e=>e is Button or ToggleSwitch or Slider or ComboBox or NumberBox or NavigationView or ColorPicker).Select(e=>e.GetType().Name).Distinct().ToArray();Check($"{theme} {width} {route} has no stock controls",stock.Length==0,stock);
+                    var stock=DetailDescendants(page).Where(e=>e switch
+                    {
+                        PaintButton or PaintSlider => false,
+                        ToggleSwitch toggle => !PaintSwitch.IsPainted(toggle),
+                        Button or Slider or ComboBox or NumberBox or NavigationView or ColorPicker => true,
+                        _ => false
+                    }).Select(e=>e.GetType().Name).Distinct().ToArray();Check($"{theme} {width} {route} uses the approved control presentation",stock.Length==0,stock);
                     var text=DetailDescendants(page).OfType<TextBlock>().ToArray();Check($"{theme} {width} {route} typography",text.All(t=>t.FontSize is 12 or 14 or 16 or 24));
                     if(width==1232&&route=="overview")await CaptureApprovedSurface($"Painted-{theme}-{route}-{width}");
                 }
             }
             PaintNavigate("overview");await Settle();var initial=overviewSaved.ToArray();PaintButton Find(string name)=>DetailDescendants(page).OfType<PaintButton>().First(b=>AutomationProperties.GetName(b)==name);Find("编辑磁贴").Invoke();await Settle();Check("Edit entry replaced by save and cancel icons",!DetailDescendants(page).OfType<PaintButton>().Any(b=>AutomationProperties.GetName(b)=="编辑磁贴")&&Find("保存磁贴布局").Content is Image&&Find("取消编辑磁贴").Content is Image);
             overviewDraft!.Clear();Render();await Settle();Check("Empty layout retains add",DetailDescendants(page).OfType<PaintSelect>().Any(b=>AutomationProperties.GetName(b)=="添加面板"));Find("取消编辑磁贴").Invoke();await Settle();Check("Cancel restores saved order",overviewSaved.SequenceEqual(initial)&&overviewDraft==null);
-            var toggle=new PaintSwitch("自绘开关输入",false);page.Children.Add(toggle);toggle.Invoke();Check("Custom switch toggles",toggle.IsOn);toggle.Invoke();Check("Custom switch returns to off",!toggle.IsOn);
+            var toggle=PaintSwitch.Create("原生开关输入",false);page.Children.Add(toggle);await Settle();
+            var toggleInput=(IToggleProvider)new ToggleSwitchAutomationPeer(toggle).GetPattern(PatternInterface.Toggle);
+            toggleInput.Toggle();await Settle();Check("Styled switch toggles",toggle.IsOn);
+            toggleInput.Toggle();await Settle();Check("Styled switch returns to off",!toggle.IsOn);
             Check("Read-only review did not acquire hardware",!hardware.Active&&upstream==null&&!trayAvailable);
         }
         catch(Exception error){Check("Review completed",false,error.ToString());}

@@ -14,12 +14,15 @@ public sealed class DiagnosticJournal
     private readonly Queue<JsonElement> recent=new();
     private readonly Dictionary<string,(DateTimeOffset at,int suppressed)> repeated=new();
     private readonly int maxBytes,retainedSessions;
+    private bool diskWrites=true;
     public string Session{get;}=$"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Environment.ProcessId}-{Guid.NewGuid():N}";
     public string? DirectoryPath{get;}
     public string? FilePath=>DirectoryPath==null?null:Path.Combine(DirectoryPath,"session-"+Session+".jsonl");
     public string? LastWriteError{get;private set;}
     public DiagnosticJournal(string? directory,int maxBytes=1024*1024,int retainedSessions=8)
     {DirectoryPath=directory;this.maxBytes=Math.Max(1024,maxBytes);this.retainedSessions=Math.Clamp(retainedSessions,1,16);}
+    public void SetDiskWrites(bool enabled)
+    {lock(gate)diskWrites=enabled;}
     public void Write(string name,string level="info",object? data=null,Exception? error=null,string? operation=null,bool throttle=false)
     {
         try
@@ -36,7 +39,7 @@ public sealed class DiagnosticJournal
                 }
                 var entry=JsonSerializer.SerializeToElement(new{schema=1,at=DateTimeOffset.UtcNow,session=Session,pid=Environment.ProcessId,thread=Environment.CurrentManagedThreadId,level,eventId=Limit(name,100),operation,suppressed,data=SafeData(data),exception=ExceptionData(error)});
                 if(recent.Count>=256)recent.Dequeue();recent.Enqueue(entry);
-                if(FilePath==null)return;
+                if(!diskWrites||FilePath==null)return;
                 try
                 {
                     Directory.CreateDirectory(DirectoryPath!);
@@ -110,10 +113,17 @@ public static class DiagnosticLog
     private static DiagnosticJournal journal=new(null);
     private static readonly AsyncLocal<string?> correlation=new();
     public static DiagnosticJournal Current=>Volatile.Read(ref journal);
-    public static void StartProcess(string mode)
+    public static void StartProcess(string mode,bool sharedTempFallback=true)
     {
         string? directory=null;string? failure=null;
-        try{directory=Path.Combine(AppData.DiagnosticsPath,"runtime");Directory.CreateDirectory(directory);}catch(Exception e){failure=e.GetType().Name+": "+e.Message;try{directory=Path.Combine(Path.GetTempPath(),"OpenRevoNative","diagnostics","runtime");Directory.CreateDirectory(directory);}catch{directory=null;}}
+        try{directory=Path.Combine(AppData.DiagnosticsPath,"runtime");Directory.CreateDirectory(directory);}
+        catch(Exception e)
+        {
+            failure=e.GetType().Name+": "+e.Message;
+            directory=null;
+            if(sharedTempFallback)
+                try{directory=Path.Combine(Path.GetTempPath(),"OpenRevoNative","diagnostics","runtime");Directory.CreateDirectory(directory);}catch{directory=null;}
+        }
         Interlocked.Exchange(ref journal,new(directory));
         bool? administrator=null;try{administrator=Hal.GpuModeControl.IsAdministrator();}catch{}
         Record("process.started",new{mode,version=System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString(),os=Environment.OSVersion.VersionString,architecture=RuntimeInformation.ProcessArchitecture.ToString(),framework=RuntimeInformation.FrameworkDescription,administrator,logPathResolutionFailure=failure});
@@ -131,18 +141,32 @@ public static class DiagnosticLog
         public void Fail(Exception error,object? data=null){if(finished)return;finished=true;Current.Write(name+".failed","error",new{elapsedMs=timer.ElapsedMilliseconds,details=data},error,id);}
         public void Dispose(){if(!finished)Complete(outcome:"interrupted");correlation.Value=parent;}
     }
-    public static object Collect(string diagnosticsDirectory)
+    public static object Collect(string diagnosticsDirectory,bool includeSharedTemp=true)
     {
         var files=new List<object>();int budget=1024*1024;
         var names=new List<string>();string runtime=Path.Combine(diagnosticsDirectory,"runtime");
-        try{foreach(string dir in new[]{runtime,Current.DirectoryPath,Path.Combine(Path.GetTempPath(),"OpenRevoNative","diagnostics","runtime")}.OfType<string>().Distinct())if(Directory.Exists(dir))names.AddRange(Directory.GetFiles(dir!,"session-*.jsonl*").OrderByDescending(File.GetLastWriteTimeUtc).Take(8));names=names.Distinct().OrderByDescending(File.GetLastWriteTimeUtc).Take(8).ToList();}catch(Exception e){Failure("logs.collect.enumeration",e);}
-        names.AddRange(new[]{"startup-failure.txt","native.log","hardware-audit.jsonl"}.Select(n=>Path.Combine(diagnosticsDirectory,n)));
+        string? shared=includeSharedTemp?Path.Combine(Path.GetTempPath(),"OpenRevoNative","diagnostics","runtime"):null;
+        foreach(string dir in new[]{runtime,Current.DirectoryPath,shared}.OfType<string>().Distinct())
+        {
+            try
+            {
+                if(!includeSharedTemp)UserDataStore.ValidateDirectory(dir);
+                if(Directory.Exists(dir))names.AddRange(Directory.GetFiles(dir,"session-*.jsonl*").OrderByDescending(File.GetLastWriteTimeUtc).Take(8));
+            }
+            catch(Exception error){Failure("logs.collect.enumeration",error);}
+        }
+        names=names.Distinct().OrderByDescending(File.GetLastWriteTimeUtc).Take(8).ToList();
+        names.AddRange(new[]{"startup-failure.txt","native.log"}.Select(n=>Path.Combine(diagnosticsDirectory,n)));
+        // HardwareSession writes the audit beside diagnostics, in the data root.
+        string dataDirectory=Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(diagnosticsDirectory)))??diagnosticsDirectory;
+        names.Insert(0,Path.Combine(dataDirectory,"hardware-audit.jsonl"));
         foreach(string path in names)
         {
             if(budget<=0)break;
             try
             {
-                if(!File.Exists(path))continue;using var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete);
+                if(!File.Exists(path)||!includeSharedTemp&&(File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0)continue;
+                using var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete);
                 int size=(int)Math.Min(stream.Length,Math.Min(128*1024,budget));bool truncated=stream.Length>size;stream.Seek(-size,SeekOrigin.End);byte[] bytes=new byte[size];int count=stream.Read(bytes,0,size);budget-=count;
                 string content=Encoding.UTF8.GetString(bytes,0,count);if(truncated&&path.Contains(".jsonl",StringComparison.Ordinal)){int line=content.IndexOf('\n');content=line<0?"":content[(line+1)..];}
                 files.Add(new{name=Path.GetFileName(path),bytes=stream.Length,truncated,content=DiagnosticJournal.Scrub(content,128*1024)});

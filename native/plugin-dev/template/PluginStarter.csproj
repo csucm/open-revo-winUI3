@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="OpenRevo.PluginSdk"><HintPath>$(OpenRevoSdkPath)</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <Target Name="RequireOpenRevoSdk" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(OpenRevoSdkPath)')" Text="Build the framework first and pass -p:OpenRevoSdkPath=.../OpenRevo.PluginSdk.dll." />
+  </Target>
+</Project>

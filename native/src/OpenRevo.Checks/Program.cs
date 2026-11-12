@@ -657,25 +657,35 @@ Check("Performance rejects invalid modes, battery and unconfirmed turbo before w
     try {c.SetPerformanceMode(3,true);throw new Exception("Battery turbo accepted");} catch(InvalidOperationException){}
     Assert(fake.Writes==0,"Power gate wrote hardware");
 });
-Check("Factory modes preserve unrelated mode, lighting and battery bits and undo full tables",()=>
+Check("Factory modes and undo preserve the manual fan boost state throughout",()=>
 {
-    var fake=new FakeControl{ClearLightingCommands=true};fake.SeedPerformance();fake.Values[Vault.Trigger]=144;fake.Values[Vault.ModeIndex]=161;
-    var c=new HardwareSession(()=>fake,()=>null,_=>{},()=>true);c.Takeover();var before=c.ProbePerformance();
-    foreach(int mode in new[]{1,2,3})
+    foreach (byte boost in new byte[] { 0, Vault.FanBoostMask })
     {
-        var receipt=c.SetPerformanceMode(mode,true);
-        Assert(receipt.After.Mode==mode,"Mode readback incorrect");
-        Assert((receipt.After.Fans.ModeIndex & 225)==161 && (receipt.After.Trigger & 144)==144,"Unrelated bits destroyed");
-        c.UndoPerformance();var after=c.ProbePerformance();
-        Assert(after.Fans.CpuDuty.SequenceEqual(before.Fans.CpuDuty) && after.Clamp==before.Clamp,"Undo did not restore fan table/clamp");
+        var fake=new FakeControl{ClearLightingCommands=true};fake.SeedPerformance();fake.Values[Vault.Trigger]=144;fake.Values[Vault.ModeIndex]=161;
+        fake.Values[Vault.FanClamp]=boost;
+        var c=new HardwareSession(()=>fake,()=>null,_=>{},()=>true);c.Takeover();var before=c.ProbePerformance();
+        foreach(int mode in new[]{1,2,3})
+        {
+            var receipt=c.SetPerformanceMode(mode,true);
+            Assert(receipt.After.Mode==mode,"Mode readback incorrect");
+            Assert((receipt.After.Fans.ModeIndex & 225)==161 && (receipt.After.Trigger & 144)==144,"Unrelated bits destroyed");
+            c.UndoPerformance();var after=c.ProbePerformance();
+            Assert(after.Fans.CpuDuty.SequenceEqual(before.Fans.CpuDuty) && after.Clamp==before.Clamp,"Undo did not restore fan table/clamp");
+        }
+        Assert(fake.FanClampWrites.All(value => (value & Vault.FanBoostMask) == boost),"Mode switch changed the manual fan boost bit");
+        Assert(fake.Values[Vault.BatteryUpper]==60 && fake.Values[Vault.BatteryMode]==41,"Performance changed battery");
     }
-    Assert(fake.Values[Vault.BatteryUpper]==60 && fake.Values[Vault.BatteryMode]==41,"Performance changed battery");
 });
-Check("Partial performance failure stops tables and attempts strong cooling",()=>
+Check("A failed factory fan-table write stops before commit and leaves manual boost alone",()=>
 {
-    var fake=new FakeControl();fake.SeedPerformance();var c=new HardwareSession(()=>fake,()=>null,_=>{},()=>true);c.Takeover();fake.FailAt=10;
-    try{c.SetPerformanceMode(2);throw new Exception("Write failure ignored");}catch(IOException){}
-    Assert(!c.Active && fake.WrittenAddresses.Last()==Vault.FanClamp && (fake.Values[Vault.FanClamp]&Vault.FanBoostMask)!=0,"Failure did not preserve cooling");
+    foreach (byte boost in new byte[] { 0, Vault.FanBoostMask })
+    {
+        var fake=new FakeControl();fake.SeedPerformance();fake.Values[Vault.FanClamp]=boost;
+        var c=new HardwareSession(()=>fake,()=>null,_=>{},()=>true);c.Takeover();fake.FailAt=10;
+        try{c.SetPerformanceMode(3,true);throw new Exception("Write failure ignored");}catch(IOException){}
+        Assert(!c.Active && fake.Writes==fake.FailAt && fake.Values[Vault.FanLatch]==0,"Failed table was committed or continued writing");
+        Assert(fake.FanClampWrites.Count==0 && fake.Values[Vault.FanClamp]==boost,"Failure changed the manual fan boost bit");
+    }
 });
 Check("Unrecognized fan tables cannot be overwritten by performance presets",()=>
 {
@@ -826,6 +836,63 @@ Check("Tuning rejects unsafe power, unknown clocks and descending curves before 
     foreach(var bad in new[]{p with{Pl1=p.Pl2+1},p with{Pl4=p.Pl2+19},p with{TemperatureC=105},p with{Offsets=new(251,0)},descending})
     {try{c.ApplyTuning(gpu,s,bad);throw new Exception("Unsafe profile accepted");}catch(ArgumentException){}}
     Assert(fake.Writes==0&&gpu.Writes==0,"Validation wrote hardware");
+});
+Check("Classic factory presets with insufficient PL4 headroom still produce safe drafts",()=>
+{
+    foreach(var (pl1,pl2,rawPl4,expectedPl4,peakLimit) in new[]
+        {(130,130,135,150,185),(205,205,200,225,250),(130,130,200,200,250)})
+    {
+        var fake=new FakeControl();fake.SeedTuning();
+        fake.Values[Vault.ModeIndex]=16;
+        fake.Values[Vault.TurboPl1]=(byte)pl1;
+        fake.Values[Vault.TurboPl2]=(byte)pl2;
+        fake.Values[Vault.TurboPl4]=(byte)rawPl4;
+        var gpu=new FakeTuningGpu();
+        var session=new HardwareSession(()=>fake,()=>null,_=>{},()=>true,()=>"Intel i7-14650HX");
+        session.Takeover();
+        var state=session.ProbeTuning(gpu);
+        var draft=state.CreateDraft();
+        Assert(state.Registers.TurboPl4==rawPl4&&state.Pl4Max==peakLimit,"Raw or maximum PL4 changed");
+        Assert((draft.Pl1,draft.Pl2,draft.Pl4)==(pl1,pl2,expectedPl4),"Wrong factory draft limits");
+        HardwareSession.ValidateTuning(state,draft);
+        try{HardwareSession.ValidateTuning(state,draft with{Pl4=pl2+19});throw new Exception("Unsafe PL4 accepted");}catch(ArgumentException){}
+        fake.Values[Vault.TurboPl4]=0;
+        try{session.ProbeTuning(gpu);throw new Exception("Missing factory PL4 accepted");}catch(TuningFactoryLimitsException){}
+        Assert(fake.Writes==0&&gpu.Writes==0,"Reading or adapting factory values wrote hardware");
+    }
+});
+Check("Classic CPU power ceilings follow the upstream adjustable range and couple draft edits",()=>
+{
+    var fake=new FakeControl();fake.SeedTuning();fake.Values[Vault.ModeIndex]=16;
+    fake.Values[Vault.TurboPl1]=130;fake.Values[Vault.TurboPl2]=130;fake.Values[Vault.TurboPl4]=200;
+    var session=new HardwareSession(()=>fake,()=>null,_=>{},()=>true,()=>"Intel");
+    session.Takeover();
+    var state=session.ProbeTuning(new FakeTuningGpu());
+    Assert(state.Pl2Max==155&&state.CpuCeilingRange(CpuPowerLimit.Pl2)==(130,155,180),"Original PL2 limits differ");
+    var configured=state with{CpuCeilings=new(180,180,300)};
+    Assert(configured.Pl2Max==180&&configured.Pl4Max==255,"Ceilings did not preserve the register range");
+    var raised=configured.EditCpuDraft(state.CreateDraft() with{Pl4=160},CpuPowerLimit.Pl1,180);
+    Assert((raised.Pl1,raised.Pl2,raised.Pl4)==(180,180,200),"Raising PL1 did not push PL2 and PL4 up");
+    var lowered=configured.EditCpuDraft(raised,CpuPowerLimit.Pl4,170);
+    Assert((lowered.Pl1,lowered.Pl2,lowered.Pl4)==(150,150,170),"Lowering PL4 did not pull PL2 and PL1 down");
+    HardwareSession.ValidateTuning(configured,raised);
+    HardwareSession.ValidateTuning(configured,lowered);
+    Assert(fake.Writes==0,"Editing ceilings or drafts wrote hardware");
+});
+Check("Declared classic fan tuning leaves unavailable CPU and discrete GPU registers untouched",()=>
+{
+    var fake=new FakeControl();fake.SeedPerformance();
+    var gpu=new FakeTuningGpu();
+    var admission=new CoreCompatibility(true,true,true,"TongfangAcpiKernel","Tongfang-ACPI","fixture",Vault.VerifiedProject,
+        "fixture",2,true,100,true,true,true,true,false,true){ClassicCpuTuning=false,IntegratedOnly=true};
+    var session=new HardwareSession(()=>fake,()=>null,_=>{},()=>true,fixtureAdmission:admission);
+    session.Takeover();
+    var state=session.ProbeTuning(gpu);
+    var profile=state.CreateDraft() with{CustomFans=true};
+    var receipt=session.ApplyTuning(gpu,state,profile);
+    Assert(!state.CpuTuning&&!state.Gpu.Capabilities.Supported&&receipt.After.Performance.Mode==4,"Fan tuning did not confirm");
+    ushort[] excluded=[Vault.CustomPl1,Vault.CustomPl2,Vault.CustomPl4,Vault.CustomTcc,Vault.GpuDbControl,Vault.GpuDbFlag,Vault.GpuDbWatts,Vault.GpuTgpOffset];
+    Assert(!fake.WrittenAddresses.Intersect(excluded).Any()&&gpu.Writes==0,"Unsupported CPU or discrete GPU tuning was written");
 });
 Check("Tuning curve encoding preserves zero standby, monotonic duty and thermal hysteresis",()=>
 {
@@ -1028,10 +1095,13 @@ sealed class FakeControl : IHardwareTransport
         [Vault.RgbRed] = 20, [Vault.RgbGreen] = 30, [Vault.RgbBlue] = 40, [Vault.Backlight] = 153, [Vault.Trigger] = 48, [Vault.FanIsolated] = 0 };
     public int Writes, FailAt; public bool IgnoreWrite, RejectInvertedThresholds, ClearLightingCommands,ConsumeWinLock;
     public readonly List<ushort> WrittenAddresses = [];
+    public readonly List<byte> FanClampWrites = [];
     public byte? Read(ushort address) => Values.TryGetValue(address, out byte value) ? value : null;
     public bool Write(ushort address, byte value)
     {
-        Writes++; WrittenAddresses.Add(address); if (Writes == FailAt) return false;
+        Writes++; WrittenAddresses.Add(address);
+        if (address == Vault.FanClamp) FanClampWrites.Add(value);
+        if (Writes == FailAt) return false;
         if (!IgnoreWrite) Values[address] = value;
         if(!IgnoreWrite && ConsumeWinLock && address==Vault.Trigger && (value&Vault.WinLockMask)!=0)
         {Values[Vault.SwitchStatus]^=Vault.WinLockMask;Values[address]&=unchecked((byte)~Vault.WinLockMask);}

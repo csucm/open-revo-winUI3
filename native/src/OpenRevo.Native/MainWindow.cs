@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using OpenRevo.Core;
 using OpenRevo.Core.Hal;
+using OpenRevo.ResidentProtocol;
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using Windows.Graphics;
@@ -21,12 +22,18 @@ public sealed partial class MainWindow : Window
     private Grid? captionGrid;
     private Button? panelToggle;
     private readonly Dictionary<int, Button> performanceButtons = [];
-    private readonly SemaphoreSlim operationQueue = new(1, 1);
+    private readonly ApplicationHardwareRuntime? localRuntime;
+    private ApplicationHardwareRuntime hardwareRuntime => localRuntime ??
+        throw new InvalidOperationException("当前面板的设备事务必须由常驻后台处理。");
+    private HardwareSession hardware => hardwareRuntime.Hardware;
+    private HardwareOperationQueue operationQueue => hardwareRuntime.Operations;
+    private PerformanceCommandService performance => hardwareRuntime.Performance;
+    private DeviceCommandService devices => hardwareRuntime.Devices;
     private readonly PaintNavigation navigation = new();
     private readonly ScrollViewer scroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly StackPanel page = new() { Spacing = 18, Padding = new Thickness(32, 24, 32, 32), MaxWidth = 1120, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly Dictionary<string, TextBlock> live = new();
-    private readonly Telemetry telemetry = new();
+    private Telemetry telemetry => hardwareRuntime.Telemetry.Foreground;
     private readonly DispatcherQueueTimer timer;
     private DeviceIdentity identity = new("未知", "正在读取设备…", "未知", "未知", []);
     private SystemSnapshot? latest;
@@ -40,24 +47,53 @@ public sealed partial class MainWindow : Window
     private RectInt32 normalBounds;
     private int interval = 2;
     private int selectedTheme;
-    private SystemPreferences systemPreferences=SystemPreferences.Load();
+    private SystemPreferences systemPreferences;
     private readonly NativeActionLog actions = [];
 
-    public MainWindow(bool uiChecks=false,bool reviewDetails=false)
+#if RESIDENT_PANEL_HOST
+    internal MainWindow(PanelClient client) : this(null, client, false, false) { }
+#else
+    internal MainWindow(ApplicationHardwareRuntime hardwareRuntime,bool uiChecks=false,bool reviewDetails=false)
+        : this(hardwareRuntime, null, uiChecks, reviewDetails) { }
+#endif
+
+    private MainWindow(ApplicationHardwareRuntime? local, PanelClient? client, bool uiChecks, bool reviewDetails)
     {
+        localRuntime = local;
+        residentClient = client;
         uiReviewMode=uiChecks;
+        if (local != null)
+        {
+            writeBrightness=local.Display.SetBrightnessAsync;
+            local.PerformanceInput.PhysicalModeCompleted+=PresentPhysicalModeResult;
+            systemPreferences = SystemPreferences.Load();
+            var preferences = AppData.Load();
+            selectedTheme=preferences.Theme;
+            interval=preferences.SampleSeconds;
+            lowRefreshOnBattery=preferences.LowRefreshOnBattery;
+            osdEnabled=preferences.OsdEnabled;
+            hardware.SetBatteryPerformancePermission(systemPreferences.UnlockBatteryLimit);
+            overviewSaved=[..OverviewLayout.Load()];
+        }
+        else
+        {
+            writeBrightness=SetResidentBrightnessAsync;
+            systemPreferences = new();
+            InitializeResidentState(client!);
+        }
+#if NATIVE_RESIDENT_CORE
+        Title = "Open Revo";
+#else
         Title = "Open-Revo";
+#endif
         SystemBackdrop = null;
         MotionDesign.Configure(systemPreferences.MotionSpeed);
-        var preferences = AppData.Load();
-        selectedTheme=preferences.Theme;root.RequestedTheme = (ElementTheme)selectedTheme;
-        interval = preferences.SampleSeconds;
-        lowRefreshOnBattery = preferences.LowRefreshOnBattery;
-        osdEnabled=preferences.OsdEnabled;hardware.SetBatteryPerformancePermission(systemPreferences.UnlockBatteryLimit);
-        requestedGpu = preferences.RequestedGpu; gpuSavedAt = preferences.GpuSavedAtUnix;
+        root.RequestedTheme = (ElementTheme)selectedTheme;
         // The target layout can be smaller than the moving HWND. Keep a full
         // client-area backdrop behind it throughout the shape transition.
-        void PaintWindowSurface()=>windowSurface.Background=root.Background;
+        void PaintWindowSurface(){root.Background=Paint.Brush(Paint.Bg(root));windowSurface.Background=root.Background;}
+        NativePluginThemePalette.RegisterRoot(root,"main");
+        NativePluginThemePalette.Bind(root,PaintWindowSurface);
         PaintWindowSurface();
         root.ActualThemeChanged+=(_,_)=>PaintWindowSurface();
         Content = windowSurface;
@@ -69,6 +105,7 @@ public sealed partial class MainWindow : Window
         caption.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
         caption.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         var drag = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
+        captionDragArea = drag;
         captionLabel.VerticalAlignment = VerticalAlignment.Center;
         drag.Children.Add(new Image { Width = 16, Height = 16, VerticalAlignment=VerticalAlignment.Center, Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "App.ico"))) });
         var brand=new StackPanel{Orientation=Orientation.Horizontal,Spacing=4,VerticalAlignment=VerticalAlignment.Center};
@@ -86,6 +123,7 @@ public sealed partial class MainWindow : Window
         UpdateThemeToggle();
         root.ActualThemeChanged += (_, _) => { if(!closed)UpdateThemeToggle(); };
         var captionActions = new StackPanel { Orientation = Orientation.Horizontal };
+        captionActionArea = captionActions;
         panelToggle = Ui.Button("", (_, _) => ToggleMini());
         panelToggle.Width = 36; panelToggle.Height = 32; panelToggle.MinWidth = 0; panelToggle.MinHeight = 0;
         panelToggle.Padding = new Thickness(0); panelToggle.BorderThickness = new Thickness(0);
@@ -94,6 +132,8 @@ public sealed partial class MainWindow : Window
         captionActions.Children.Add(panelToggle); captionActions.Children.Add(themeToggle);
         Grid.SetColumn(captionActions, 1); caption.Children.Add(captionActions); root.Children.Add(caption);
         SetTitleBar(drag);
+        drag.SizeChanged += (_, _) => UpdateMiniCaptionRegions();
+        captionActions.SizeChanged += (_, _) => UpdateMiniCaptionRegions();
         AttachCaptionModeCommand();
         ResizeLogical(1180, 850);
         var icon = Path.Combine(AppContext.BaseDirectory, "App.ico");
@@ -115,24 +155,41 @@ public sealed partial class MainWindow : Window
         scroll.SizeChanged += (_,_) => QueueDesktopViewport();
         navigation.SelectionChanged += (_, e) => { if (!syncingNavigation && e.SelectedItem is PaintNavItem item && item.Tag is string id) PaintNavigate(id); };
         Grid.SetRow(navigation, 1); root.Children.Add(navigation);
-        navigation.Build();navigation.SelectedItem = navigation.MenuItems[0];
+        navigation.Build();
+        if (residentClient == null) navigation.SelectedItem = navigation.MenuItems[0];
         timer = DispatcherQueue.CreateTimer(); timer.Interval = TimeSpan.FromSeconds(interval);
         timer.Tick += (_, _) => Tick();
         AppWindow.Changed += (_, e) => {if((e.DidSizeChange||e.DidPresenterChange)&&!panelShapeChanging){AlignCaption();QueueDesktopViewport();}if(!uiReviewMode&&AppWindow.Presenter is OverlappedPresenter{State:OverlappedPresenterState.Minimized})QueuePanelMinimize();UpdatePolling();};
-        InitializeTray();
+        if (residentClient == null) InitializeTray();
+        else AttachResidentPanel();
         AppWindow.Closing += (sender,args)=>
         {
-            if(sessionEnding){desktopRuntimeClosed=true;return;}
+            if (residentClient != null)
+            {
+                args.Cancel = !residentAllowClose;
+                if (args.Cancel) HideToTray();
+                return;
+            }
+            if(sessionEnding){operationQueue.StopAccepting();desktopRuntimeClosed=true;return;}
             if((!uiReviewMode||trayReviewMode)&&!exitRequested){args.Cancel=true;HideToTray();return;}
-            if(hardwareBusy||quickBusy||requestedWinLocked.HasValue||takeoverChanging||tuningApplying||displayBusy||brightnessApplying||displayTopologyReading||gpuChanging||desktopServiceBusy||sleepOfficeBusy){args.Cancel=true;return;}
-            if(upstream!=null&&!desktopRuntimeClosed){args.Cancel=true;_ = CloseDesktopRuntime();}
+            if(hardwareRuntimeReleased)return;
+            if(hardwareBusy||quickBusy||requestedWinLocked.HasValue||takeoverChanging||tuningApplying||displayBusy||brightnessApplying||displayTopologyReading||gpuChanging||desktopServiceBusy||sleepOfficeBusy||batteryGuardBusy){args.Cancel=true;return;}
+            args.Cancel=true;
+            _ = CloseDesktopRuntime();
         };
         Activated += (_,_)=>{windowBrandIcon?.Apply();if(!panelShapeChanging){AlignCaption();ResetCaptionHover();}};
-        Closed += (_,_)=>{StopModeKeyMonitor();DisposeDisplayTopologyRead();ReleaseOverviewDrag();ReleaseMiniPreview();HidePanelHandoff();panelCompositionGuard?.Dispose();extensionHost?.Dispose();windowBrandIcon?.Dispose();};
-        Closed += (_, _) => { closed = true;DisposeTray(); DetachDesktopPowerEvents();timer.Stop(); powerTimer?.Stop();capsLockObserver?.Dispose(); nativeOsd?.Dispose();lightingDebounce?.Cancel(); try {sessionPower?.Dispose();}finally{screenOffPower?.Dispose();} _ = Task.Run(() => { temperatures.Dispose(); upstream?.Dispose(); }); };
+        Closed += (_,_)=>{if(localRuntime!=null){localRuntime.PerformanceInput.PhysicalModeCompleted-=PresentPhysicalModeResult;localRuntime.PerformanceInput.SynchronizePhysicalMode(false);DisposeDisplayTopologyRead();StopNativePluginsOnClose();}ReleaseOverviewDrag();ReleaseMiniPreview();HidePanelHandoff();panelCompositionGuard?.Dispose();extensionHost?.Dispose();windowBrandIcon?.Dispose();};
+        Closed += (_, _) =>
+        {
+            closed = true;
+            timer.Stop();
+            if (residentClient != null) { residentSensors?.Dispose(); residentClient.Dispose(); Application.Current.Exit(); return; }
+            operationQueue.StopAccepting();DisposeTray(); DetachDesktopPowerEvents();powerTimer?.Stop();capsLockObserver?.Dispose(); nativeOsd?.Dispose();lightingDebounce?.Cancel(); _ = hardwareRuntime.ReleaseAsync();
+        };
         root.Loaded += async (_, _) =>
         {
             if (initialized) return; initialized = true;
+            if (residentClient != null) { InitializeResidentPresentation(); return; }
             if(Environment.GetCommandLineArgs().Contains("--painted-ui-review")){await RunPaintedUiReview();Close();return;}
             if(Environment.GetCommandLineArgs().Contains("--approved-ui-review")){await RunApprovedUiReview();Close();return;}
             if(App.IsPanelShapeReview){await RunPanelShapeReview();return;}
@@ -156,7 +213,14 @@ public sealed partial class MainWindow : Window
             if(uiChecks){if(App.IsAdmissionReview)await RunAdmissionReview();else if(App.IsCapsUiReview)await RunCapsUiReview();else if(App.IsOsdPowerReview)await RunOsdPowerReview();else if(App.IsDesignReview)await RunDesignReview();else if(Environment.GetCommandLineArgs().Any(a=>a is "--ui-settings-checks" or "--ui-theme-restore-checks"))await RunSettingsTrayReview();else if(Environment.GetCommandLineArgs().Contains("--ui-replica-checks"))await RunReplicaLayoutReview();else if(Environment.GetCommandLineArgs().Contains("--ui-window-checks"))await RunWindowFixChecks();else await RunUiReviewChecks();Close();return;}
             ObserveHardwareOsd();StartCapsLockMonitor();UpdatePolling(); StartPowerPolicy(); await CheckAutomaticRefresh(true);await InitializeDesktopServicesRuntime();
         };
-        if ((systemPreferences.WakeMode=="mini"||systemPreferences.WakeMode=="remember"&&systemPreferences.LastMini)&&!reviewDetails) ToggleMini(); else UpdatePanelToggle();
+        bool initialMini = client?.Attached.WakeTarget switch
+        {
+            PanelWakeTarget.Mini => true,
+            PanelWakeTarget.Full or PanelWakeTarget.Settings or PanelWakeTarget.Updates => false,
+            _ => client?.Attached.Draft?.Compact ??
+                (systemPreferences.WakeMode=="mini"||systemPreferences.WakeMode=="remember"&&systemPreferences.LastMini)&&!reviewDetails
+        };
+        if (initialMini) ToggleMini(); else UpdatePanelToggle();
     }
     private void AddNavigation(string title,string id,Symbol unused)
     {
@@ -166,19 +230,29 @@ public sealed partial class MainWindow : Window
     private bool IsVisibleNow() => !closed && AppWindow.IsVisible && (AppWindow.Presenter is not OverlappedPresenter p || p.State != OverlappedPresenterState.Minimized);
     private void UpdatePolling()
     {
+        if (residentClient != null) { PublishResidentDemand(); SyncResidentPluginPage(); return; }
         if(App.IsPanelShapeReview||Environment.GetCommandLineArgs().Any(a=>a is "--approved-ui-review" or "--painted-ui-review"))return;
         if (timer == null || !initialized) return;
         bool visible = IsVisibleNow();
         // Moving/resizing a visible native window must not cause extra telemetry reads.
         if (visible == pollingActive) return;
         pollingActive = visible;
-        if (visible) { telemetry.Reset(); Tick(); timer.Start(); } else { timer.Stop(); telemetry.Reset(); }
+        if (visible) { telemetry.Reset(); Tick(); timer.Start(); }
+        else
+        {
+            timer.Stop();
+            telemetry.Reset();
+            overviewSampling.SetForegroundDemand(null);
+            UpdateGpuTemperatureDemand();
+        }
     }
     private void Tick()
     {
+        if (residentClient != null) return;
         if (!IsVisibleNow()) return;
         latest = telemetry.Read();
         extensionHost?.Publish(new(DateTimeOffset.Now, latest.CpuPercent, latest.UsedMemoryGiB, latest.TotalMemoryGiB, latest.BatteryPercent, latest.OnAc));
+        RefreshNativePluginState(true);
         if (ecTask is { IsCompleted: true })
         {
             if (ecEnabled) ec = ecTask.IsCompletedSuccessfully ? ecTask.Result : new(null, null, null, null, "EC 读取异常，数据不可用");
@@ -191,6 +265,7 @@ public sealed partial class MainWindow : Window
         }
         if (ecEnabled && ecTask is { IsCompleted: false } && DateTimeOffset.Now - ecStarted > TimeSpan.FromSeconds(4))
             ec = new(null, null, null, null, "EC 读取超时；未启动重复请求，可关闭读取");
+        UpdateGpuTemperatureDemand();
         UpdateValues();
         SamplePanelTemperatures();
         SampleQuickActions();
@@ -229,6 +304,9 @@ public sealed partial class MainWindow : Window
     }
     private void Render()
     {
+        captureResidentDeclaredDraft=null;
+        NativePluginThemePalette.RegisterRoot(root,mini?"mini":"main");
+        if (residentClient == null && (currentPage != "plugins" || mini)) StopForegroundFolderPlugins();
         ReleaseOverviewDrag(); ReleaseMiniPreview();
         renderCount++;
         live.Clear(); performanceButtons.Clear(); compactChargeButtons.Clear(); refreshButtons.Clear();
@@ -245,68 +323,11 @@ public sealed partial class MainWindow : Window
         page.Children.Clear();
         scroll.ChangeView(0, 0, null, true);
         ArrangeDesktopViewport();
-        if(UsePaintedUi){RenderPaintedPage();return;}
-        if (mini) { RenderMini(); UpdateValues(); ApplyPageDesign(); return; }
-        syncingNavigation=true;
-        try { navigation.SelectedItem=navigation.MenuItems.OfType<PaintNavItem>().FirstOrDefault(item=>Equals(item.Tag,currentPage is "osdsettings" or "storage" or "diagnostics"?"settings":currentPage=="sleep"?"power":currentPage)); }
-        finally { syncingNavigation=false; }
-        string title = currentPage switch { "power" => "电源与电池", "display" => "显卡与屏幕", "devices" => "灯光与设备", "plugins" => "插件兼容", "settings" => "设置与诊断", "updates"=>"软件更新", "sleep"=>"智能睡眠守护","osdsettings"=>"OSD 设置","storage"=>"数据存储管理","diagnostics"=>"诊断与日志", _ => "状态总览" };
-        if(currentPage is "osdsettings" or "storage" or "diagnostics" or "sleep")
-        {string parent=currentPage=="sleep"?"power":"settings";page.Children.Add(SubpageBack(parent=="power"?"电源与电池":"设置与诊断",(_,_)=>{currentPage=parent;Render();}));page.Children.Add(DetailHeader(title,"管理相关选项，保留真实状态与系统操作。","settings"));}
-        else if(currentPage=="devices"&&selectedLightingZone!="keyboard")
-        {page.Children.Add(SubpageBack("灯光与设备",(_,_)=>{selectedLightingZone="keyboard";Render();}));page.Children.Add(DetailHeader("其他灯区","同一组控件用于各灯区；能力与效果列表分别读取。","keyboard"));}
-        else if(currentPage=="plugins")
-        {page.Children.Add(DetailHeader(title,"管理原生扩展，查看可用能力与兼容状态。","plugins"));}
-        else if(currentPage=="overview")
-        {
-            page.Children.Add(OverviewHeader());
-        }
-        else
-        {
-            if(currentPage=="display"&&customTuningOpen)
-            {
-                var back=SubpageBack(TuningReturnLabel,(_,_)=>BackFromTuning());back.IsEnabled=!tuningApplying;page.Children.Add(back);
-                page.Children.Add(DetailHeader("自定义调校","CPU / GPU 联合调校 · 风扇曲线 · 点击应用后生效。","\uE713"));
-            }
-            else if(currentPage=="display"&&colorTuningOpen)
-            {
-                page.Children.Add(SubpageBack("显卡与屏幕",(_,_)=>{colorTuningOpen=false;Render();}));
-                page.Children.Add(DetailHeader("调色控制","全局滤镜 · 影响所有显示器。","color"));
-            }
-            else page.Children.Add(DetailHeader(title,currentPage switch
-            {
-                "power"=>"管理睡眠守护、供电选项与电池充电上限。",
-                "display"=>"管理显卡模式、屏幕亮度与色彩。",
-                "devices"=>"调整键盘背光、灯效和颜色。",
-                "settings"=>"管理系统功能、后台行为、应用外观与诊断。",
-                _=>"查看本机运行状态，快速进入常用控制。"
-            },currentPage switch{"power"=>"\uE8F1","display"=>"\uE7F4","devices"=>"\uE765","settings"=>"settings",_=>"\uE9D9"}));
-        }
-        switch (currentPage)
-        {
-            case "sleep":
-            case "power": RenderPower(); break;
-            case "display": RenderDisplay(); break;
-            case "devices": RenderDevices(); break;
-            case "plugins": RenderPlugins(); break;
-            case "osdsettings":
-            case "storage":
-            case "diagnostics":
-            case "settings": RenderSettings(); break;
-            case "updates": page.Children.Add(UpdateControls());break;
-            default: RenderOverview(); break;
-        }
-        ApplyPageDesign();ApplyDeveloperLayoutPreview();UpdateValues();UpdateOverviewPowerTarget();
-        if(currentPage is not ("plugins" or "settings")){UpdateControlValues();UpdateGpuControls();UpdateDisplayValues();}
-        if(currentPage is "power" or "display" or "devices")_ = ReadDesktopServices();
-        EnforceDeveloperPreviewReadOnly();
-        ArrangeDesktopViewport();
+        RenderPaintedPage();
+        if (residentClient == null) UpdateGpuTemperatureDemand();
+        else { PublishResidentDemand(); SyncResidentPluginPage(); }
     }
     private Border Metric(string title, string key, UIElement detail) => Ui.Card(Ui.Stack(Ui.Text(title, 13, muted: true), Value(key), detail));
-    private void RenderOverview()
-    {
-        RenderDesktopOverview();
-    }
     private ToggleSwitch EcToggle()
     {
         var toggle = new ToggleSwitch { IsOn = ecEnabled, OnContent = "读取中", OffContent = "已关闭", IsEnabled = EcReader.IsAllowed(identity), VerticalAlignment = VerticalAlignment.Center };
@@ -318,19 +339,10 @@ public sealed partial class MainWindow : Window
         };
         return toggle;
     }
-    private void RenderPower() => RenderDesktopPower();
-    private void RenderDisplay()
-    {
-        if(customTuningOpen)page.Children.Add(TuningEditor());
-        else if(colorTuningOpen)RenderColorTuningPage();
-        else RenderDesktopDisplay();
-    }
-    private void RenderDevices() => RenderDesktopDevices();
-    private void RenderSettings()=>RenderSystemSettings();
     private void ToggleMini()
     {
         if (closed) return;
-        if (!mini && PaintRoute=="minicustomization" && (miniDraft!=null||miniSaving)) { _=ToggleMiniFromEditor(); return; }
+        if (initialized && !mini && PaintRoute=="minicustomization" && (miniDraft!=null||miniSaving)) { _=ToggleMiniFromEditor(); return; }
         if (panelShapeChanging) { SetPanelGoal(!panelGoalMini); return; }
         CloseCaptionExpandTip();
         panelGoalMini = !mini;
@@ -346,32 +358,22 @@ public sealed partial class MainWindow : Window
         ToolTipService.SetToolTip(panelToggle, label);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(panelToggle, label);
     }
-    private void RenderMini()
-    {
-        RenderCompactPanel();
-    }
     private RectInt32 MiniPanelBounds()
     {
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         double scale=GetDpiForWindow(captionWindow)/96d;if(scale<=0)scale=1;
-        int margin=(int)Math.Round(12*scale),width=Math.Min((int)(400*scale),Math.Max(1,area.Width-40)),height=Math.Min((int)(PaintMiniHeight(width/scale)*scale),Math.Max(1,area.Height-40));
+        int margin=(int)Math.Round(MiniEdgeMarginDip*scale),width=Math.Min((int)(400*scale),Math.Max(1,area.Width-40)),height=Math.Min((int)(PaintMiniHeight(width/scale)*scale),Math.Max(1,area.Height-40));
         return new(area.X+Math.Max(0,area.Width-width-margin),area.Y+Math.Max(0,area.Height-height-margin),width,height);
     }
     private async Task<bool> Confirm(string title, string message)
     {
         if (dialogOpen) return false;
-        if(UsePaintedUi)return await PaintDialog(title,Paint.Text(message),"确认修改","取消");
-        dialogOpen = true;
-        try { return await new ContentDialog { XamlRoot = root.XamlRoot, Title = title, Content = Ui.Text(message), PrimaryButtonText = "确认修改", CloseButtonText = "取消", DefaultButton = ContentDialogButton.Close }.ShowAsync() == ContentDialogResult.Primary; }
-        finally { dialogOpen = false; }
+        return await PaintDialog(title,Paint.Text(message),"确认修改","取消");
     }
     private async Task ShowMessage(string title, string message)
     {
         if (dialogOpen || closed) return;
-        if(UsePaintedUi){await PaintDialog(title,Paint.Text(message));return;}
-        dialogOpen = true;
-        try { await new ContentDialog { XamlRoot = root.XamlRoot, Title = title, Content = Ui.Text(message), CloseButtonText = "知道了" }.ShowAsync(); }
-        finally { dialogOpen = false; }
+        await PaintDialog(title,Paint.Text(message));
     }
     private async Task OpenSettings(string uri)
     {
@@ -381,12 +383,15 @@ public sealed partial class MainWindow : Window
     private Task Export()=>ExportDiagnosticReport();
     private async Task ChangeApplicationTheme(int theme)
     {
-        if(theme is <0 or >2)return;selectedTheme=theme;root.RequestedTheme=(ElementTheme)theme;UpdateThemeToggle();await SavePreferences(true);
+        if(theme is <0 or >2)return;
+        if (residentClient != null) { await SetResidentPreferenceAsync(new(PanelPreferenceKind.Theme, Number: theme)); return; }
+        selectedTheme=theme;root.RequestedTheme=(ElementTheme)theme;UpdateThemeToggle();await SavePreferences(true);
     }
     private async Task SavePreferences(bool themeChanged=false)
     {
+        if (residentClient != null) throw new InvalidOperationException("候选面板的设置须由后台保存。");
         if(uiReviewMode&&!AppData.IsIsolatedReviewData)return;
-        try {AppData.Update(previous=>previous with{Theme=themeChanged?selectedTheme:previous.Theme,SampleSeconds=interval,LowRefreshOnBattery=lowRefreshOnBattery,RequestedGpu=requestedGpu,GpuSavedAtUnix=gpuSavedAt,OsdEnabled=osdEnabled});}
+        try {AppData.Update(previous=>previous with{Theme=themeChanged?selectedTheme:previous.Theme,SampleSeconds=interval,LowRefreshOnBattery=lowRefreshOnBattery,OsdEnabled=osdEnabled});}
         catch (Exception e) { await ShowMessage("设置未保存", e.Message); }
     }
     private void ResizeLogical(int width, int height)

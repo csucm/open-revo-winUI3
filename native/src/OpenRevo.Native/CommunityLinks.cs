@@ -71,11 +71,11 @@ public sealed partial class MainWindow
         show??=()=>ShowCommunityImage(title,path);
         FrameworkElement button;
         if(painted)
-            button=new PaintButton(title,async()=>await show()){Content=Paint.Text(title,12),MinHeight=30,Padding=new Thickness(10,4,10,4),IsEnabled=available};
+            button=new PaintButton(title,async()=>await show()){IsEnabled=available};
         else
         {
             var native=Ui.Button(title,async(_,_)=>await show());
-            native.FontSize=12;native.MinHeight=30;native.Padding=new Thickness(10,4,10,4);native.IsEnabled=available;button=native;
+            native.MinHeight=34;native.IsEnabled=available;button=native;
         }
         ToolTipService.SetToolTip(button,available?title:title+"图片待补充");
         return button;
@@ -87,8 +87,7 @@ public sealed partial class MainWindow
         try
         {
             var picture=CommunityPicture(path);
-            if(UsePaintedUi)await PaintDialog(title,picture);
-            else await new ContentDialog{XamlRoot=root.XamlRoot,Title=title,Content=picture,CloseButtonText="关闭"}.ShowAsync();
+            await PaintDialog(title,picture);
         }
         catch(Exception error){await ShowMessage("图片未能打开",error.Message);}
     }
@@ -120,8 +119,7 @@ public sealed partial class MainWindow
             wechat.Click+=()=>Choose(true);alipay.Click+=()=>Choose(false);Choose(File.Exists(wechatPath));
             var tabs=Paint.Inline(8,wechat,alipay);tabs.HorizontalAlignment=HorizontalAlignment.Center;
             var content=Paint.Stack(10,tabs,picture);
-            if(UsePaintedUi)await PaintDialog("赞助支持",content);
-            else await new ContentDialog{XamlRoot=root.XamlRoot,Title="赞助支持",Content=content,CloseButtonText="关闭"}.ShowAsync();
+            await PaintDialog("赞助支持",content);
         }
         catch(Exception error){await ShowMessage("赞助图片未能打开",error.Message);}
     }

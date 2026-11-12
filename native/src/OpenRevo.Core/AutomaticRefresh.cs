@@ -8,11 +8,11 @@ public sealed class AutomaticRefresh
     private int? restoreRate;
     public bool Pending { get; private set; }
     public bool NeedsEvaluationWhenDisabled => wasEnabled || Pending;
+    public bool NeedsEvaluation(bool enabled, bool? onAc) =>
+        onAc.HasValue && (enabled ? !wasEnabled || appliedAc != onAc || Pending : NeedsEvaluationWhenDisabled);
     public void Evaluate(bool enabled, bool? onAc, Func<DisplayState> read, Action<int, int> change)
     {
-        if (!onAc.HasValue) return;
-        if (!enabled && !NeedsEvaluationWhenDisabled) return;
-        if (enabled && wasEnabled && appliedAc == onAc && !Pending) return;
+        if (!NeedsEvaluation(enabled, onAc)) return;
         var state = read();
         if (!state.Active || state.DeviceName.Length == 0 || state.Rates.Length == 0) { Pending = true; wasEnabled = enabled; return; }
         int target = state.Hertz;

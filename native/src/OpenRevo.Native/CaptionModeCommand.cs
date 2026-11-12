@@ -34,7 +34,7 @@ public sealed partial class MainWindow
         captionWindow=WinRT.Interop.WindowNative.GetWindowHandle(this);
         captionWindowProc=OnCaptionWindowMessage;
         captionModeAttached=SetWindowSubclass(captionWindow,captionWindowProc,CaptionModeSubclassId,0);
-        AttachDesktopPowerEvents();
+        if (residentClient == null) AttachDesktopPowerEvents();
         if(!captionModeAttached)actions.Add("标题栏展开命令未连接，保留原展开入口。");
         captionExpandAnchor=new Border{Width=46,Height=32,HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Top,IsHitTestVisible=false,Margin=new Thickness(0,0,46,0)};
         Grid.SetRow(captionExpandAnchor,0);root.Children.Add(captionExpandAnchor);
@@ -75,7 +75,7 @@ public sealed partial class MainWindow
             catch(Exception error)
             {
                 actions.Add("标题栏："+error.Message);
-                try{System.IO.File.WriteAllText(System.IO.Path.Combine(AppContext.BaseDirectory,"caption-error.txt"),error.ToString());}catch{}
+                if(residentClient==null)try{System.IO.File.WriteAllText(System.IO.Path.Combine(AppContext.BaseDirectory,"caption-error.txt"),error.ToString());}catch{}
             }
         });
     }
@@ -119,8 +119,12 @@ public sealed partial class MainWindow
         if(HandleTrayWindowMessage(message,wParam,lParam,out var trayResult))return trayResult;
         if (message == 0x007E || message == 0x0219 && wParam == 0x0007)
         {
-            OpenRevo.Core.DisplayTopology.InvalidateGpuIdentity(); // WM_DISPLAYCHANGE / DBT_DEVNODES_CHANGED
-            QueueDisplayTopologyRead();
+            if (residentClient == null)
+            {
+                OpenRevo.Core.DisplayTopology.InvalidateGpuIdentity(); // WM_DISPLAYCHANGE / DBT_DEVNODES_CHANGED
+                QueueDisplayTopologyRead();
+            }
+            else InvalidateResidentRefresh();
         }
         if(message==0x0024)
         {
@@ -130,7 +134,11 @@ public sealed partial class MainWindow
             ApplyDesktopMinMax(lParam);
             return 0;
         }
-        HandleDesktopPowerMessage(message,wParam,lParam);
+        if (residentClient == null)
+        {
+            HandleDesktopPowerMessage(message,wParam,lParam);
+            HandleNativePluginPowerMessage(message,wParam);
+        }
         if(mini&&!closed)
         {
             if(message==0x00A0&&wParam==9) // WM_NCMOUSEMOVE, HTMAXBUTTON

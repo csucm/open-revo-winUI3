@@ -1,14 +1,12 @@
-# Native 维护与旧工程归档
-
-2026-11-07，用户授权整理仓库，并要求不影响功能和后续维护。
+# OpenRevo 维护与旧工程归档
 
 ## 当前入口
 
 | 目录/文件 | 职责 |
 | --- | --- |
-| `native/src/OpenRevo.Native/` | 当前 WinUI 界面、mini、托盘、OSD 与交互 |
-| `native/src/OpenRevo.Core/` | 当前 C# 系统服务、硬件队列、配置和诊断 |
-| `native/src/OpenRevo.CoreBridge/` | 当前 Rust C ABI 桥接 |
+| `native/src/OpenRevo.Native/` | WinUI 大面板、Mini、交互和可见时的详细采样 |
+| `native/src/OpenRevo.Core/` | 共享 C# 系统服务和旧入口所需实现 |
+| `native/src/OpenRevo.CoreBridge/` | 原生常驻内核、硬件队列、后台策略、托盘、OSD 和 Rust C ABI |
 | `native/src/OpenRevo.Upstream/` | 固定上游 Core、资源、许可与已适配的本地补丁 |
 | `native/src/OpenRevo.Checks/` | 现有定向检查 |
 | `native/src/Branding/` | 正式图标与核对脚本 |
@@ -36,10 +34,10 @@
 
 需要查阅时可直接浏览归档分支，或在独立工作目录检出它。不要把整个旧 Core 同步覆盖到 Native：两份 Core 有版本和本地适配差异。选择性移植时记录来源 SHA、改动及验证范围，并保留许可和原作者版权。
 
-## 这次整理保护的内容
+## 2026-11-07 归档记录
 
 - `native/` 下全部文件原字节保留，包括硬件协议、机型表、锁文件、图标、资源、WebView2 兼容库配置和构建脚本。
-- 当前 0.6.9 Release、附件和标签保留，不重新编译、重打包或替换已测试安装包。
+- 当时的 0.6.9 Release、附件和标签保留，不重新编译、重打包或替换已测试安装包。
 - 旧工程从主分支归档，不改写 Git 历史，不删除归档分支或旧标签。
 - 根 `.gitattributes` 只说明文档统计及保留活跃 Core 的可见性，不设置换行或编码转换，不把当前硬件代码伪标为生成文件。
 - 此次维护整理不宣称安装包体积或运行内存下降，也不代表新增硬件功能已验收。

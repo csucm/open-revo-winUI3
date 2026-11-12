@@ -24,7 +24,7 @@ public static class EcReader
             if (ec.Read(Vault.ProjectId) is not byte id || id is 0 or 255||capability.Project.HasValue&&id!=capability.Project) return new(null, null, null, null, "EC 身份与Core探测不一致，已停止读取");
             var cpu = Rpm(ec, Vault.CpuFanHigh, Vault.CpuFanLow);
             var gpu = Rpm(ec, Vault.GpuFanHigh, Vault.GpuFanLow);
-            var limit = ec.Read(Vault.BatteryUpper);
+            int? limit = ec.Read(Vault.BatteryUpper) is byte raw ? raw & Vault.BatteryPercentMask : null;
             var boost = ec.Read(Vault.FanClamp);
             return new(cpu, gpu, limit is >= 40 and <= 100 ? limit : null,
                 boost is byte b ? (b & Vault.FanBoostMask) != 0 : null,

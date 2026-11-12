@@ -1,34 +1,41 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenRevo.Core;
-using OpenRevo.Core.Hal;
+using OpenRevo.ResidentProtocol;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
-    private string PerformanceName=>hardware.CurrentMode switch{1=>"办公",2=>"均衡",3=>"狂暴",4=>"自定义",_=>"待读取"};
+    private string PerformanceName=>PanelMode switch{1=>"办公",2=>"均衡",3=>"狂暴",4=>"自定义",_=>"待读取"};
     private async Task ApplySavedPerformance(int mode)
     {
-        if(!hardware.Active||hardwareBusy||tuningApplying)return;
-        if(mode!=4){await RunHardware(()=>hardware.ApplyModeCommand(upstream,mode,mode==3),"性能档位已回读确认。");return;}
-        if(hardware.DeclaredCpuTuning!=null)
+        if (residentClient != null)
         {
-            if(hardware.SavedDeclaredTuning is {} preset)await ApplyDeclaredPreset(preset);
-            else OpenTuning();
+            if (PanelTuningBusy) return;
+            if (mode != (int)PerformanceMode.Custom)
+            {
+                await RunResidentActionAsync(PanelOperation.SelectMode, mode);
+                return;
+            }
+            var reply = await SendResidentAsync(PanelOperation.SelectMode, mode);
+            if (closed || residentDetaching) return;
+            if (reply.Outcome == PanelOutcome.Rejected && reply.Tuning is { Declared: { Saved: null } } available)
+            {
+                LoadResidentCatalog(available);
+                tuningDraft = null;
+                tuningStatus = "已读取设备声明的调校范围。";
+                OpenTuning(readAutomatically: false);
+            }
+            else if (reply.Outcome is PanelOutcome.Rejected or PanelOutcome.Busy or PanelOutcome.Unknown or PanelOutcome.ConfigurationSaveFailed)
+                await ShowMessage("自定义模式未应用", reply.Message ?? "请刷新设备状态后重试。");
             return;
         }
-        try
-        {
-            if(upstream==null)throw new IOException("设备未连接。");
-            string? id=AppData.Load().SelectedTuningPreset??tuningPresetId;
-            if(string.IsNullOrEmpty(id))throw new IOException("请通过齿轮选择并保存一个调校预设。");
-            var snapshot=await Task.Run(()=>hardware.ProbeTuning(upstream));
-            var originals=await Task.Run(()=>upstream.Read(18));
-            var defaults=originals.EnumerateArray().Select(p=>TuningPresetStore.FromOriginal(p,snapshot,true)).ToArray();
-            var preset=tuningPresetStore.LoadForApply(id,defaults,snapshot);
-            HardwareSession.ValidateTuning(snapshot,preset.Profile);
-            await RunHardware(()=>hardware.ApplyTuning(upstream,snapshot,preset.Profile.Copy()),"自定义预设已应用并回读确认。");
-        }
-        catch(Exception error){await ShowMessage("自定义模式未应用",error.Message);}
+        if(!hardware.Active||hardwareBusy||tuningApplying)return;
+        var target=(PerformanceMode)mode;
+        bool custom=target==PerformanceMode.Custom;
+        var result=await RunPerformance(()=>performance.SelectModeAsync(target,target==PerformanceMode.Turbo,tuningPresetId),
+            custom?"自定义预设已应用并回读确认。":"性能档位已回读确认。",
+            custom?"自定义模式未应用":null);
+        if(!closed&&result.Outcome==PerformanceOutcome.NeedsPreset)OpenTuning();
     }
     private FrameworkElement PerformanceChoices()
     {

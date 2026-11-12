@@ -1,0 +1,10 @@
+{
+  "apiMajor": 1,
+  "id": "sample-hardware-controls",
+  "name": "硬件控制开发示例",
+  "version": "1.0.0",
+  "entryAssembly": "HardwareControls.dll",
+  "entryType": "OpenRevo.SamplePlugins.HardwareControlsPlugin",
+  "permissions": ["ui.view", "hardware.performance.set", "hardware.fanBoost.set", "hardware.battery.limit.set"],
+  "background": false
+}

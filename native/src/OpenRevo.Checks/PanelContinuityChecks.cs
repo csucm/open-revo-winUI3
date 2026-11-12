@@ -1,6 +1,7 @@
 using OpenRevo.Native;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Windows.Graphics;
 
 internal static class PanelContinuityChecks
 {
@@ -8,16 +9,20 @@ internal static class PanelContinuityChecks
     {
         var checks=new List<object>();
         void Check(string name,bool passed)=>checks.Add(new{name,passed});
-        var full=new PanelMotionRect(-1920,40,1180,900);var mini=new PanelMotionRect(-420,300,400,640);
-        foreach(var(start,end)in new[]{(full,mini),(mini,full)})
+        var full=new RectInt32(-1920,40,1180,900);var mini=new RectInt32(-420,300,400,640);
+        Check("Approved 220 ms timeline",PanelHandoffGeometry.DurationMilliseconds==220);
+        Check("Exact opacity endpoints",PanelHandoffGeometry.Opacity(0)==(1d,0d)&&PanelHandoffGeometry.Opacity(1)==(0d,1d));
+        var frames=Enumerable.Range(0,221).Select(i=>PanelHandoffGeometry.Opacity(i/220d)).ToArray();
+        Check("Bounded overlapping handoff",frames.All(f=>f.Large is >=0 and <=1&&f.Mini is >=0 and <=1&&f.Large+f.Mini>0));
+        Check("Reversible monotone opacity",frames.Zip(frames.Skip(1)).All(p=>p.Second.Large<=p.First.Large&&p.Second.Mini>=p.First.Mini));
+        foreach(double scale in new[]{1d,1.5,2d})
         {
-            Check($"Exact endpoints {start.Width}",PanelMotionGeometry.At(start,end,0)==start&&PanelMotionGeometry.At(start,end,1)==end);
-            var frames=Enumerable.Range(0,251).Select(i=>PanelMotionGeometry.At(start,end,i/250d)).ToArray();
-            Check($"No overshoot or zero sizes {start.Width}",frames.All(f=>f.Width>=Math.Min(start.Width,end.Width)&&f.Width<=Math.Max(start.Width,end.Width)&&f.Height>=Math.Min(start.Height,end.Height)&&f.Height<=Math.Max(start.Height,end.Height)&&f.X>=Math.Min(start.X,end.X)&&f.X<=Math.Max(start.X,end.X)));
-            Check($"Monotone width {start.Width}",frames.Zip(frames.Skip(1)).All(p=>end.Width>start.Width?p.Second.Width>=p.First.Width:p.Second.Width<=p.First.Width));
+            var travel=PanelHandoffGeometry.Travel(full,mini,scale);
+            var reverse=PanelHandoffGeometry.Travel(mini,full,scale);
+            Check($"DPI {scale} travel capped at 16 DIP",Math.Sqrt(travel.X*travel.X+travel.Y*travel.Y)<=16*scale+1e-8);
+            Check($"DPI {scale} reverse direction",Math.Abs(travel.X+reverse.X)<1e-8&&Math.Abs(travel.Y+reverse.Y)<1e-8);
         }
-        Check("Clamp invalid progress",PanelMotionGeometry.At(full,mini,-1)==full&&PanelMotionGeometry.At(full,mini,double.NaN)==mini&&PanelMotionGeometry.At(full,mini,2)==mini);
-        Check("Ease-out slows near destination",PanelMotionGeometry.Ease(.25)>.25&&PanelMotionGeometry.Ease(.75)-PanelMotionGeometry.Ease(.5)<PanelMotionGeometry.Ease(.5)-PanelMotionGeometry.Ease(.25));
+        Check("Coincident centers do not move",PanelHandoffGeometry.Travel(full,full,1)==(0d,0d));
         nint window=CreateWindowEx(0,"STATIC","Open-Revo hidden caption check",0,0,0,100,100,0,0,0,0);
         if(window==0)throw new System.ComponentModel.Win32Exception();
         int neutralMoves=0;Hook hook=(hwnd,msg,wp,lp,id,data)=>{if(msg==0xA0&&wp==0)neutralMoves++;return DefSubclassProc(hwnd,msg,wp,lp);};

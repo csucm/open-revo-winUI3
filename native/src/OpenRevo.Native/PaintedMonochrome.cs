@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenRevo.Core;
 using OpenRevo.Core.Hal;
+using OpenRevo.ResidentProtocol;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
@@ -15,8 +16,8 @@ public sealed partial class MainWindow
         ? monochromeReadback : null;
     private string MonochromeStatus=>CurrentMonochromeLevel is int level
         ? level==0?"当前背光已关闭":$"当前背光 {level} 档"
-        : !hardware.Active?"请在设置中接管硬件后调节白色背光"
-        : (!CoreMachine.Current.MonochromeControl||monochromeLevels.Length<=1)?"驱动未提供可调档位":monochromeNotice;
+        : !PanelHardwareActive?"请在设置中接管硬件后调节白色背光"
+        : ((residentClient==null&&!CoreMachine.Current.MonochromeControl)||monochromeLevels.Length<=1)?"驱动未提供可调档位":monochromeNotice;
     private void UpdateMonochromeReadback(OverviewSwitches switches)
     {
         if(keyboard.Kind!="White")return;
@@ -25,23 +26,26 @@ public sealed partial class MainWindow
         lightingReadFresh=monochromeReadback.HasValue;
         lightingProbeError=lightingReadFresh?null:"白色背光当前档位未能读取。";
     }
-    private bool MonochromeEnabled=>keyboard.Kind=="White"&&hardware.CoreDelegated&&CoreMachine.Current.MonochromeControl&&hardware.Active&&monochromeLevels.Length>1&&!hardwareBusy&&!monochromeBusy;
+    private bool MonochromeEnabled=>residentClient!=null?PanelHardwareActive&&monochromeLevels.Length>1&&!PanelHardwareActionBusy(PanelOperation.Desktop,typeof(PanelSetMonochrome)):keyboard.Kind=="White"&&hardware.CoreDelegated&&CoreMachine.Current.MonochromeControl&&hardware.Active&&monochromeLevels.Length>1&&!hardwareBusy&&!monochromeBusy;
     private async Task SendMonochrome(int level)
     {
         if(uiReviewMode||!MonochromeEnabled||!monochromeLevels.Contains(level))return;
-        monochromeBusy=true;extraGeneration++;monochromeReadback=null;lightingReadFresh=false;RefreshPaintedState();await operationQueue.WaitAsync();
+        if(residentClient!=null){await SetResidentMonochromeAsync(level);return;}
+        if(!operationQueue.IsAccepting)return;
+        monochromeBusy=true;extraGeneration++;monochromeReadback=null;lightingReadFresh=false;RefreshPaintedState();
+        if(!await operationQueue.EnterAsync()){monochromeBusy=false;if(!closed)RefreshPaintedState();return;}
         using var trace=DiagnosticLog.Begin("lighting.monochrome.command");
         try
         {
             if(closed)return;
-            var result=await Task.Run(()=>hardware.SendMonochromeLevel(level));
+            var result=await Task.Run(()=>hardwareRuntime.Desktop.SetMonochrome(level));
             monochromeRequested=level;monochromeNotice=$"已发送{(level==0?"关闭":level+"档")} · 未回读确认";
-            if(upstream!=null)
+            if(result.Readback is { } readback)
             {
-                extraSwitches=await Task.Run(upstream.ReadOverviewSwitches);
+                extraSwitches=readback;
                 UpdateMonochromeReadback(extraSwitches);
             }
-            trace.Complete(new{command=result,requestedLevel=level,readback=monochromeReadback,confirmed=monochromeReadback==level});
+            trace.Complete(new{requestedLevel=level,readback=monochromeReadback,confirmed=monochromeReadback==level,result.ReadError});
         }
         catch(Exception error){monochromeNotice="命令未确认发送 · 实际档位未知";trace.Fail(error);if(!closed)await ShowMessage("白色背光",error.Message);}
         finally{operationQueue.Release();monochromeBusy=false;if(!closed)RefreshPaintedState();}

@@ -147,6 +147,6 @@ pub fn validate_icc(name:&str,bytes:&[u8])->Result<(),String> {
     for n in 0..tags{let p=132+n*12;let start=u32::from_be_bytes(bytes[p+4..p+8].try_into().unwrap()) as usize;let len=u32::from_be_bytes(bytes[p+8..p+12].try_into().unwrap()) as usize;if start.checked_add(len).filter(|end|*end<=size).is_none(){return Err("ICC标签超出文件边界".into());}}
     Ok(())
 }
-fn validate_color(p:&crate::system::display_tuning::DisplayColorPreset)->Result<(),String>{
+pub fn validate_color(p:&crate::system::display_tuning::DisplayColorPreset)->Result<(),String>{
     if p.id.len()>100||p.name.len()>200||!(1000..=12000).contains(&p.color_temp_k)||![p.gain_r,p.gain_g,p.gain_b].iter().all(|n|n.is_finite()&&(0.0..=2.0).contains(n))||!p.saturation.is_finite()||!(0.0..=2.5).contains(&p.saturation)||![p.gamma,p.contrast].iter().all(|n|n.is_finite()&&(0.5..=2.0).contains(n)){Err("色彩参数超出原版范围".into())}else{Ok(())}
 }

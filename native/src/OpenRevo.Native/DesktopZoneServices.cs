@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using System.Text.Json;
+using OpenRevo.Core;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
@@ -82,12 +83,13 @@ public sealed partial class MainWindow
         if(upstream==null||zoneEnabled==null||zoneEffect==null||zoneBrightness==null||zoneSpeed==null||zoneColor==null||zoneEffect.SelectedIndex<0)return;
         zoneDebounce?.Cancel();var debounce=zoneDebounce=new CancellationTokenSource();
         var color=zoneColor.Color;
-        var request=new{zone=selectedLightingZone,enabled=zoneEnabled.IsOn,effect=zoneEffects[zoneEffect.SelectedIndex].Id,brightness=(int)zoneBrightness.Value,speed=(int)zoneSpeed.Value,color=$"#{color.R:X2}{color.G:X2}{color.B:X2}"};
+        var request=new ZoneLightingRequest(selectedLightingZone,zoneEnabled.IsOn,zoneEffects[zoneEffect.SelectedIndex].Id,
+            (int)zoneBrightness.Value,(int)zoneSpeed.Value,$"#{color.R:X2}{color.G:X2}{color.B:X2}");
         try
         {
             await Task.Delay(250,debounce.Token);
             while(zoneServicesBusy)await Task.Delay(60,debounce.Token);
-            if(!closed)await DesktopServiceAction("lighting-"+request.zone,()=>upstream.ExecuteFeature(6,request),true);
+            if(!closed)await DesktopServiceAction("lighting-"+request.Zone,()=>hardwareRuntime.Desktop.SetLightingZone(request),true);
         }
         catch(OperationCanceledException){}
     }

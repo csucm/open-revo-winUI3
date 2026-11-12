@@ -35,7 +35,7 @@ public sealed record OverviewTelemetry(OverviewCpu Cpu,OverviewGpu Gpu,bool GpuS
     public int TopologyGeneration { get; init; }
 }
 public sealed record CoreOsdEvent(ulong Sequence,string Feature,string Value);
-public sealed partial class UpstreamCoreLibrary
+public sealed partial class UpstreamCoreLibrary : IOverviewTelemetrySource
 {
     private static readonly JsonSerializerOptions snakeCase=new(){PropertyNamingPolicy=JsonNamingPolicy.SnakeCaseLower};
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]private delegate int SwitchSet(uint key,uint expected,uint target);
@@ -45,6 +45,18 @@ public sealed partial class UpstreamCoreLibrary
     public OverviewSwitches ReadOverviewSwitches()=>Read(11).Deserialize<OverviewSwitches>(snakeCase)??throw new IOException("Core开关读取失败。");
     private readonly WindowsGpuTelemetry windowsGpu=new();
     public object GpuTelemetryDiagnostics { get { lock (gate) return windowsGpu.Diagnostics; } }
+
+    internal void ReleaseOverviewSamplingResources()
+    {
+        lock (gate)
+        {
+            if (library == 0) return;
+            windowsGpu.ReleaseSamplingResources();
+            if (NativeLibrary.TryGetExport(library, "or_native_metrics_reset", out var reset))
+                Marshal.GetDelegateForFunctionPointer<ResetMetrics>(reset)();
+        }
+    }
+
     public OverviewTelemetry ReadOverviewTelemetry(bool sampleGpu, bool? discreteDeclared = null)
     {
         lock(gate)
@@ -52,41 +64,7 @@ public sealed partial class UpstreamCoreLibrary
             int generation = DisplayTopology.GpuGeneration;
             bool useNvml = sampleGpu && discreteDeclared != false;
             var result=Read(10,useNvml?1u:0u).Deserialize<OverviewTelemetry>(snakeCase)??throw new IOException("Core监测读取失败。");
-            result = result with { TopologyGeneration = generation };
-            if (!sampleGpu) return result with { GpuSource = "GPU sampling inactive" };
-
-            var gpu = result.Gpu;
-            if (gpu.Usage != null || gpu.Temperature != null || gpu.CoreMhz != null ||
-                gpu.MemoryMhz != null || gpu.MemoryTotalBytes != null || gpu.MemoryUsedBytes != null || gpu.PowerW != null)
-            {
-                // The bridge's display name and sensors use NVML device index 0.
-                // A name is not a Windows LUID: do not merge Windows fields.
-                string machineKind = windowsGpu.InspectNvmlMachine(discreteDeclared);
-                return result with
-                {
-                    GpuSource = "NVIDIA NVML device index 0",
-                    Gpu = gpu with { MachineKind = machineKind, SampledAt = DateTimeOffset.UtcNow }
-                };
-            }
-            var sample = windowsGpu.Read(discreteDeclared);
-            if (sample == null)
-                return result with { GpuSampled = true, GpuSource = "GPU adapter or telemetry unavailable" };
-            return result with
-            {
-                GpuSampled = true,
-                GpuSource = "Windows WDDM adapter counters, DXGI capacities and matched AMD ADLX sensors",
-                Gpu = new(sample.Temperature, sample.CoreMhz, sample.MemoryMhz, sample.Usage,
-                    sample.Adapter.DedicatedBytes > 0 ? sample.Adapter.DedicatedBytes : null, sample.DedicatedUsedBytes, sample.PowerW)
-                {
-                    AdapterName = sample.Adapter.Name,
-                    AdapterLuid = sample.Adapter.Luid,
-                    AdapterKind = sample.Kind.ToString(),
-                    MachineKind = sample.MachineKind,
-                    SampledAt = sample.At,
-                    SharedLimitBytes = sample.Adapter.SharedBytes > 0 ? sample.Adapter.SharedBytes : null,
-                    SharedUsedBytes = sample.SharedUsedBytes
-                }
-            };
+            return ReadOnlyTelemetryReader.Project(windowsGpu, result, sampleGpu, discreteDeclared, generation);
         }
     }
     public void SetOverviewSwitch(OverviewSwitch key,bool expected,bool target)

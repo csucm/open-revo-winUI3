@@ -25,7 +25,7 @@ pub(super) fn declared_fn_readback() -> bool {
         .is_some_and(|manifest| manifest.actions.contains_key("get_fn_lock"))
 }
 
-fn switch_read(id:u32)->Option<bool>{
+pub(super) fn switch_read(id:u32)->Option<bool>{
     use openrevo_core::driver::wmi_ec as ec;
     match id {
         1|2=>radio_read(id),
@@ -36,6 +36,10 @@ fn switch_read(id:u32)->Option<bool>{
         _=>None
     }
 }
+pub(super) fn read_monochrome() -> Option<u8> {
+    openrevo_core::hal::get_hardware_driver().read_live_monochrome_backlight()
+}
+
 pub(super) fn native_switches()->serde_json::Value {
     let fn_lock = switch_read(4);
     let fn_lock_source = if declared_fn_readback() {
@@ -47,7 +51,7 @@ pub(super) fn native_switches()->serde_json::Value {
     } else {
         "unavailable"
     };
-    let monochrome = openrevo_core::hal::get_hardware_driver().read_live_monochrome_backlight();
+    let monochrome = read_monochrome();
     json!({"wifi":switch_read(1),"bluetooth":switch_read(2),"touchpad":switch_read(3),"fn_lock":fn_lock,
         "fn_lock_source":fn_lock_source,"monochrome_level":monochrome})
 }

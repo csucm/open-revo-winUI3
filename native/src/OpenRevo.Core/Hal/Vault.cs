@@ -20,6 +20,9 @@ public static class Vault
     public const byte VerifiedProject = 16;
     public const ushort PowerStatus = 1996;
     public const byte BatterySupportMask = 64;
+    // 0x07B9: low seven bits are the limit; bit 7 is firmware's reached flag.
+    public const byte BatteryPercentMask = 127, BatteryReachedMask = 128;
+    public const byte JiaolongBatteryProject = 26;
     public const byte BatteryModeMask = 49;
     public const byte BatteryLongLife = 1, BatteryBalance = 17, BatteryStation = 33;
     public const ushort RgbRed = 1897, RgbGreen = 1898, RgbBlue = 1899;

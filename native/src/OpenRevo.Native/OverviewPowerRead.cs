@@ -8,6 +8,7 @@ public sealed partial class MainWindow
     private DateTimeOffset lastOverviewPowerRead;
     private int overviewPowerGeneration,overviewPowerReadGeneration;
     private string overviewPowerError="正在读取本机EC与GPU功耗边界。";
+    private string? overviewPowerTooltip;
     private void InvalidateOverviewPowerTargets()
     {overviewPowerGeneration++;overviewPowerTargets=null;lastOverviewPowerRead=DateTimeOffset.MinValue;}
     private async Task ReadOverviewPowerTargets()
@@ -33,6 +34,8 @@ public sealed partial class MainWindow
         var state=overviewPowerTargets;
         bool fresh=state!=null&&DateTimeOffset.Now-state.At<TimeSpan.FromSeconds(14);
         Put("overviewPowerTarget",fresh?state!.Text:"原厂目标 PL1: — W | TGP: — W");
-        if(live.TryGetValue("overviewPowerTarget",out var text))ToolTipService.SetToolTip(text,overviewPowerError);
+        if(overviewPowerTooltip==overviewPowerError||!live.TryGetValue("overviewPowerTarget",out var text))return;
+        ToolTipService.SetToolTip(text,overviewPowerError);
+        overviewPowerTooltip=overviewPowerError;
     }
 }

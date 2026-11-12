@@ -1,13 +1,15 @@
-# OpenRevo Native 0.6.9
+# OpenRevo
 
-Windows x64 community port using C# / WinUI 3 and an adapted Rust hardware core. This is not the upstream author's official release.
+**0.7.0** · Windows x64 · WinUI 3
 
-[Chinese introduction](README.md) · [Downloads](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.6.9) · [Changes from 0.6.8](docs/releases/0.6.9.md) · [Build instructions](BUILDING.md) · [Maintenance and archive map](MAINTENANCE.md)
+[Download installer](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0/Open-Revo-0.7.0-Setup-x64.exe) · [Corresponding source](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0/Open-Revo-0.7.0-Source.zip) · [Release notes](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.7.0) · [简体中文](README.md)
 
-The current application and installer sources are under `native/`. The application uses shared .NET 10 x64 Desktop Runtime and Windows App Runtime. Current UI pages do not start a web host; libraries required for possible future web-plugin compatibility remain preserved.
+OpenRevo is a community port for managing performance profiles, battery charging, display settings, and keyboard lighting on supported devices.
 
-The original React/Tauri project, web plugin samples and its original English introduction remain available on [archive-tauri-web-20261107](https://github.com/csucm/open-revo-winUI3/tree/archive-tauri-web-20261107). They are no longer active build entry points on `dev`. Removing them from this branch does not change the already-published 0.6.9 binaries or imply lower runtime memory usage.
+In 0.7.0, the WinUI panel exits when minimized to the tray. A lightweight native core continues running enabled hardware and power policies. Early cold-start testing with the panel closed recorded under 5 MB for the background process. After opening and closing the panel, memory can occasionally stay near 20 MB. A memory cleanup utility can reduce it temporarily. A fix is planned for the next version.
 
-Hardware support depends on confirmed device capabilities and driver state; unsupported or ambiguous readings are not fabricated. Plugins remain under development.
+This version also improves performance profile restoration after reboot, brightness confirmation, keyboard lighting, and sensor readings.
 
-GPL-3.0-or-later. Original upstream: [faintonce/open-revo](https://github.com/faintonce/open-revo). Existing copyright and license files remain intact.
+Before upgrading, exit the previous version from its tray menu. The installer checks for the .NET 10 x64 Desktop Runtime and Windows App Runtime. See [build instructions](BUILDING.md) for the source under [native/](native/).
+
+This community port is licensed under [GPL-3.0-or-later](LICENSE). Upstream project: [faintonce/open-revo](https://github.com/faintonce/open-revo).

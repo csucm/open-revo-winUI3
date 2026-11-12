@@ -47,36 +47,38 @@ public sealed partial class MainWindow
     }
     private void RememberPanelShape()
     {
+        if(residentClient!=null)return;
         if(uiReviewMode)return;
         systemPreferences=systemPreferences with{LastMini=panelShapeChanging?panelGoalMini:mini};
         try{systemPreferences.Save();}catch(Exception error){actions.Add("窗口记忆："+error.Message);}
     }
     private bool HideToTray()
     {
+        if(residentClient!=null)return QueueResidentDetach();
         overviewDrag?.Cancel(); CancelMiniDrags();
         if(uiReviewMode&&!trayReviewMode||exitRequested||settingsDataBusy||dataStorageExitPending)return false;
         if(!trayAvailable)AddTrayIcon();if(!trayAvailable){_=ShowMessage("托盘不可用","图标创建失败，窗口保持可见；可在设置页退出程序。");return false;}
-        RememberPanelShape();ResetCaptionHover();trayHidden=true;HidePanelHandoff();AppWindow.Hide();UpdatePolling();return true;
+        RememberPanelShape();ResetCaptionHover();trayHidden=true;StopForegroundFolderPlugins();HidePanelHandoff();AppWindow.Hide();UpdatePolling();return true;
     }
     internal void StartHiddenToTray()=>DispatcherQueue.TryEnqueue(()=>HideToTray());
     private void WakeFromTray(string? mode=null)
     {
         if(closed||exitRequested)return;
         string preferred=mode??systemPreferences.WakeMode;bool targetMini=preferred=="mini"||preferred=="remember"&&systemPreferences.LastMini;
-        bool refreshAfterHidden = trayHidden && !lowRefreshOnBattery;
+        bool refreshAfterHidden = trayHidden;
         trayHidden=false;
         if(panelShapeChanging)SetPanelGoal(targetMini);else if(mini!=targetMini)ToggleMini();
         if(AppWindow.Presenter is OverlappedPresenter presenter&&presenter.State==OverlappedPresenterState.Minimized)presenter.Restore();
         if(targetMini&&!panelShapeChanging)PositionMiniAtBottomRight();
         ResetCaptionHover();AppWindow.Show();Activate();SetForegroundWindow(captionWindow);UpdatePolling();
-        if (refreshAfterHidden) _ = CheckAutomaticRefresh();
+        if (refreshAfterHidden) _ = CheckAutomaticRefresh(refreshAfterWake:true);
     }
     private bool RuntimeBusy=>panelShapeChanging||trayHoverRead is {IsCompleted:false}||updateBusy||hardwareBusy||quickBusy||requestedWinLocked.HasValue||takeoverChanging||tuningApplying||displayBusy||brightnessApplying||displayTopologyReading||gpuChanging||desktopServiceBusy||sleepOfficeBusy||settingsDataBusy||settingsPowerBusy||batteryGuardBusy;
     private async Task ExitFromTray()
     {
         if(exitInProgress||closed)return;
         if(miniDraft!=null||miniSaving){if(trayHidden){AppWindow.Show();Activate();trayHidden=false;}if(!await CanLeaveMiniEditor())return;}
-        exitInProgress=true;exitRequested=true;HidePanelHandoff();
+        exitInProgress=true;exitRequested=true;operationQueue.StopAccepting();HidePanelHandoff();
         var watch=System.Diagnostics.Stopwatch.StartNew();
         DiagnosticLog.Record("exit.requested",ExitDiagnosticState());
         try
@@ -88,10 +90,10 @@ public sealed partial class MainWindow
                 await Task.Delay(80);
             }
             if(closed)return;if(!dataStorageExitPending)RememberPanelShape();
-            if(upstream!=null&&!desktopRuntimeClosed)await CloseDesktopRuntime();else {StartPendingUpdate();Close();}
+            await CloseDesktopRuntime();
         }
         catch(Exception error){DiagnosticLog.Failure("exit.failed",error,ExitDiagnosticState());}
-        finally{if(!closed){exitRequested=false;exitInProgress=false;}DiagnosticLog.Record("exit.finished",new{elapsedMs=watch.ElapsedMilliseconds,closed});}
+        finally{if(!closed&&!sessionEnding&&!hardwareRuntimeReleased){exitRequested=false;exitInProgress=false;operationQueue.Resume();}DiagnosticLog.Record("exit.finished",new{elapsedMs=watch.ElapsedMilliseconds,closed});}
     }
     private object ExitDiagnosticState()=>new{hardwareBusy,quickBusy,winPending=requestedWinLocked.HasValue,takeoverChanging,tuningApplying,displayBusy,brightnessApplying,gpuChanging,desktopServiceBusy,sleepOfficeBusy,settingsDataBusy,settingsPowerBusy,batteryGuardBusy,desktopServicesReading,closingDesktopRuntime,desktopRuntimeClosed,exitRequested,exitInProgress,trayHidden,dialogOpen};
     private void TrayMenu()
@@ -108,10 +110,15 @@ public sealed partial class MainWindow
     private bool HandleTrayWindowMessage(uint message,nuint wParam,nint lParam,out nint result)
     {
         result=0;
+        if(residentClient!=null)
+        {
+            if(message==0x11){result=1;return true;}
+            return message==0x112&&(wParam&0xFFF0)==0xF020&&QueuePanelMinimize();
+        }
         if(message==WakeMessage){DispatcherQueue.TryEnqueue(()=>WakeFromTray());return true;}
         if(message==TaskbarCreatedMessage){trayAvailable=false;AddTrayIcon();if(!trayAvailable&&trayHidden)DispatcherQueue.TryEnqueue(()=>WakeFromTray());return false;}
-        if(message==0x11){sessionEnding=true;exitRequested=true;result=1;return true;}
-        if(message==0x16){if(wParam!=0)DisposeTray();else{sessionEnding=false;exitRequested=false;}return false;}
+        if(message==0x11){sessionEnding=true;exitRequested=true;operationQueue.StopAccepting();result=1;return true;}
+        if(message==0x16){if(wParam!=0)DisposeTray();else{sessionEnding=false;if(!exitInProgress&&!closingDesktopRuntime&&!hardwareRuntimeReleased){exitRequested=false;operationQueue.Resume();}}return false;}
         if(message==TrayCallback)
         {
             uint action=(uint)((long)lParam&0xFFFF);

@@ -9,8 +9,9 @@ public sealed partial class MainWindow
         var samples=new List<object>();
         for(int i=0;i<2;i++)
         {
-            overviewTelemetry=await Task.Run(()=>upstream.ReadOverviewTelemetry(true));overviewTelemetryAt=DateTimeOffset.Now;
-            samples.Add(new{at=overviewTelemetryAt,overviewTelemetry});if(i==0)await Task.Delay(2100);
+            var sample = await overviewSampling.ReadForReviewAsync(upstream, sampleGpu: true);
+            samples.Add(new { at = sample.At, overviewTelemetry = sample.Data });
+            if(i==0)await Task.Delay(2100);
         }
         extraSwitches=await Task.Run(upstream.ReadOverviewSwitches);
         if(mini)ToggleMini();currentPage="overview";customTuningOpen=false;Render();root.UpdateLayout();
@@ -23,9 +24,11 @@ public sealed partial class MainWindow
             live["overviewVramUsed"].Text == (data.Gpu.DisplayMemoryUsedGiB is double used ? $"{used * displayScale:0.0}" : "—") &&
             live["overviewVramTotal"].Text == $"/ {total * displayScale:0.0} {memoryUnit}" &&
             live["overviewMemoryMhz"].Text == (data.Gpu.MemoryMhz?.ToString() ?? "—"));
-        overviewTelemetryAt=DateTimeOffset.Now.AddSeconds(-7);UpdateOverviewValues();
-        check("Stale telemetry is cleared instead of retaining previous VRAM and power values",live["overviewVramUsed"].Text=="—"&&live["overviewCpuPower"].Text=="— W");
-        overviewTelemetryAt=DateTimeOffset.Now;UpdateOverviewValues();
+        string previousVram=live["overviewVramUsed"].Text,previousPower=live["overviewCpuPower"].Text;
+        currentPage="display";
+        await Task.Delay(6100);
+        currentPage="overview";UpdateOverviewValues();
+        check("Stale telemetry stays visible with an explicit reading time",live["overviewVramUsed"].Text==previousVram&&live["overviewCpuPower"].Text==previousPower&&!OverviewTelemetryFresh);
         bool oldOsd=osdEnabled;osdEnabled=false;UpdateExtraSwitchButtons();
         check("OSD shortcut reflects disabled state without changing hardware",extraSwitchButtons["osd"].Style!=(Style)Microsoft.UI.Xaml.Application.Current.Resources["SelectedChoiceStyle"]);
         osdEnabled=oldOsd;UpdateExtraSwitchButtons();

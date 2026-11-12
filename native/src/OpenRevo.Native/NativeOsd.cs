@@ -8,33 +8,8 @@ using Microsoft.UI.Xaml.Shapes;
 using Windows.Foundation;
 using Windows.Graphics;
 using Windows.UI;
+using OpenRevo.Core;
 namespace OpenRevo.Native;
-
-internal sealed record OsdMessage(string Text,string Icon,string Accent,string? Dot=null,int? Steps=null)
-{
-    internal static OsdMessage FromFeature(string feature,string value)
-    {
-        bool on=value=="1";
-        const string blue="#38BDF8",green="#10B981",red="#F43F5E",neutral="#94A3B8",purple="#6366F1";
-        if(feature=="power_mode")return value switch
-        {"1"=>new("办公模式","office",green),"2"=>new("均衡模式","balance","#3B82F6"),"3"=>new("狂暴模式","beast",red),"4"=>new("极客调校","geek",purple),_=>new("性能模式待读取","balance",neutral)};
-        return feature switch
-        {
-            "fan_boost"=>new("一键强冷 "+(on?"开启":"关闭"),"fan",on?"#06B6D4":neutral,on?"on":"neutral"),
-            "wifi"=>new("Wi-Fi 无线网 "+(on?"开启":"关闭"),"wifi",on?blue:red,on?"on":"off"),
-            "bluetooth"=>new("蓝牙 "+(on?"开启":"关闭"),"bluetooth",on?blue:red,on?"on":"off"),
-            "touchpad"=>new("触控板 "+(on?"开启":"禁用"),"touchpad",on?blue:red,on?"on":"off"),
-            "camera"=>new("摄像头 "+(on?"开启":"关闭"),"camera",on?green:red,on?"on":"off"),
-            "mic"=>new("麦克风 "+(on?"开启":"静音"),"mic",on?green:red,on?"on":"off"),
-            "win_key"=>new("Win键 "+(on?"锁定":"解锁"),"lock",on?"#EFA6C5":neutral,on?"off":"on"),
-            "fn_lock"=>new("Fn键 "+(on?"锁定":"解锁"),"fn",on?"#B7A9FF":neutral,on?"on":"neutral"),
-            "caps_lock"=>new(on?"Caps已锁定":"Caps已解锁","caps",on?blue:neutral,on?"on":"neutral"),
-            "keep_awake"=>new("防休眠 "+(on?"开启":"关闭"),"awake",on?blue:neutral,on?"on":"neutral"),
-            "keyboard_brightness" when int.TryParse(value,out int level)&&level is >=0 and <=4=>new(level==0?"关闭背光":"背光开启","keyboard",blue,Steps:level),
-            _=>new(feature+" "+value,"balance",blue)
-        };
-    }
-}
 
 /// <summary>Compact native OSD: alpha/desktop acrylic, no activation or input capture.</summary>
 internal sealed class NativeOsd:IDisposable
@@ -342,17 +317,12 @@ internal sealed class NativeOsd:IDisposable
         var image=new Image{Width=size,Height=size,Stretch=Stretch.Uniform,Source=source,HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center};
         originalIconLoaded=false;image.ImageOpened+=(_,_)=>originalIconLoaded=true;image.ImageFailed+=(_,e)=>{iconFailure=e.ErrorMessage;OpenRevo.Core.DiagnosticLog.Event("osd.icon_failed","error",new{asset=originalAsset,error=iconFailure});};return image;
     }
-    [StructLayout(LayoutKind.Sequential)]private struct Margins{public int Left,Right,Top,Bottom;}
-    [StructLayout(LayoutKind.Sequential)]private struct Blur{public uint Flags;[MarshalAs(UnmanagedType.Bool)]public bool Enable;public nint Region;[MarshalAs(UnmanagedType.Bool)]public bool Transition;}
     [StructLayout(LayoutKind.Sequential)]private struct Rect{public int Left,Top,Right,Bottom;}
     private delegate nint Subclass(nint window,uint message,nuint wp,nint lp,nuint id,nuint data);
     [DllImport("comctl32.dll",SetLastError=true)]private static extern bool SetWindowSubclass(nint window,Subclass callback,nuint id,nuint data);
     [DllImport("comctl32.dll")]private static extern bool RemoveWindowSubclass(nint window,Subclass callback,nuint id);
     [DllImport("comctl32.dll")]private static extern nint DefSubclassProc(nint window,uint message,nuint wp,nint lp);
-    [DllImport("dwmapi.dll")]private static extern int DwmExtendFrameIntoClientArea(nint window,ref Margins margins);
-    [DllImport("dwmapi.dll")]private static extern int DwmEnableBlurBehindWindow(nint window,ref Blur blur);
     [DllImport("dwmapi.dll")]private static extern int DwmSetWindowAttribute(nint window,int attr,ref int value,int size);
-    [DllImport("gdi32.dll")]private static extern nint CreateRectRgn(int l,int t,int r,int b);
     [DllImport("gdi32.dll")]private static extern nint CreateRoundRectRgn(int l,int t,int r,int b,int width,int height);
     [DllImport("gdi32.dll")]private static extern bool DeleteObject(nint obj);
     [DllImport("gdi32.dll")]private static extern nint GetStockObject(int obj);

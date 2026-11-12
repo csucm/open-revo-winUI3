@@ -1,56 +1,9 @@
-Open-Revo - unofficial native WinUI build (development)
+﻿Open-Revo 0.7.0
 
-Requires the shared .NET 10 x64 Desktop Runtime and Windows App Runtime 2.5+.
-The installer detects .NET first and downloads the official x64 installer if needed.
-The application package no longer bundles .NET. Windows App Runtime remains separate.
+升级前请从旧版托盘菜单完全退出 OpenRevo。安装时需要管理员权限。安装后可以从开始菜单或桌面快捷方式打开面板。
 
-The console runs as administrator, as requested. Manual launch can show UAC.
-GPU selections reuse this permission and save the next-boot mode only.
-Returning to the boot baseline clears the pending-restart indication.
-Runtime GPU hot-switch and actual reboot switching are not verified.
-The app never restarts Windows automatically.
+关闭面板会将应用隐藏到托盘。后台继续处理已启用的策略。点击托盘图标可重新打开面板，要结束后台请使用托盘菜单的退出选项。
 
-Brightness submits during dragging; screen and keyboard use equal mini tracks.
-Their current runtime appearance and response still require user verification.
-Refresh controls enumerate the unique active internal panel dynamically.
-The native square caption button expands mini into the large panel.
+面板依赖 .NET 10 x64 Desktop Runtime 和 Windows App Runtime，安装器会检查运行库。显卡切换能力取决于机型和当前状态。
 
-Admission follows pinned Core platform/driver contracts and live channel probes.
-It is no longer restricted to one local DMI, BIOS or EC project.
-GM5HG0A, GM6AQ7C and other remote machines still require hardware verification.
-Capabilities differ across classic EC, IP3 and mailbox backends.
-CPU/GPU custom tuning and fan editors are connected; high-risk real tuning
-writes and other keyboard types remain unverified.
-Camera controls do not capture images. No audio is recorded.
-
-Startup remains configurable in Settings. As in previous installers, a new
-installation enables startup. Upgrades preserve the existing choice.
-An exact old startup Run entry is migrated with administrator consent to a
-current-user highest-privilege logon task. No driver, service or certificate
-is installed. User settings and the original OpenRevo task are preserved.
-
-The large overview has responsive telemetry cards and connected shortcuts.
-Core supplies CPU power (estimated values are explicitly labelled), GPU
-telemetry, dedicated VRAM use and actual memory clocks. The native OSD is
-optional. PawnIO was assessed only; it is not integrated or installed.
-WiFi/Bluetooth/touchpad/Fn write roundtrips have not been tested on hardware.
-
-Minimizing the large panel shows mini. X hides either panel to the tray.
-Minimizing mini also hides it to the tray.
-Click the tray icon to wake it. Use the tray menu or Settings > Exit to fully
-exit. Exit the previous Native instance from its tray before upgrading.
-Startup launches hidden to tray. Theme and wake preferences are persistent.
-
-Settings includes OSD, data management, power plans and optional battery
-performance unlock. Unlock is OFF by default and requires confirmation;
-it does not bypass model, numeric limits, conflict checks or readback.
-Upstream update checks track the dev branch and open its commit/release pages;
-they do not automatically download or install another application.
-
-Basic diagnostics include per-process startup context, full exceptions and
-bounded JSONL logs. Exports use schema 3. See DIAGNOSTICS.md in the source.
-See RELEASE-0.9.4.md for scope and verification limits.
-GPL-3.0-or-later. Complete corresponding source is included.
-
-
-
+详细变更见安装目录的 RELEASE-0.7.0.md。安装包附带对应源码和许可证。

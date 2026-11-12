@@ -7,34 +7,43 @@ public sealed record TemperatureReading(int? Cpu, int? Gpu, string CpuSource = "
 /// <summary>One bounded sample per request; no background worker or GPU subprocess.</summary>
 public sealed class TemperatureSensors : IDisposable
 {
-    private nint query, counter, nvml;
+    private PerformanceCounterQuery? query;
+    private nint counter, nvml;
     private readonly object gate = new();
     private bool disposed;
     private NvInit? init; private NvShutdown? shutdown; private NvHandle? handle; private NvTemp? temperature;
-    public TemperatureReading Read(bool sampleGpu)
+    public TemperatureReading Read(bool sampleGpu) => Read(sampleGpu, null);
+
+    public TemperatureReading Read(bool sampleGpu, int? coreCpu)
     {
         lock (gate)
         {
             if (disposed) return new(null, null);
-            return new(ReadCpu(), sampleGpu ? ReadGpu() : null);
+            var cpu = coreCpu ?? ReadCpu();
+            var gpu = sampleGpu ? ReadGpu() : null;
+            return coreCpu.HasValue ? new(cpu, gpu, "Core 硬件温度") : new(cpu, gpu);
         }
     }
     private int? ReadCpu()
     {
-        if (query == 0)
+        if (query == null)
         {
-            if (PdhOpenQueryW(null, 0, out query) != 0) return null;
-            if (PdhAddEnglishCounterW(query, @"\Thermal Zone Information(*)\Temperature", 0, out counter) != 0)
-            { PdhCloseQuery(query); query = 0; return null; }
+            PerformanceCounterQuery.Open(out query);
+            if (query == null) return null;
+            if (query.Add(@"\Thermal Zone Information(*)\Temperature", out counter) != 0)
+            {
+                CloseCpuQuery();
+                return null;
+            }
         }
-        if (PdhCollectQueryData(query) != 0) return null;
+        if (query.Collect() != 0) return null;
         uint bytes = 0, count = 0;
-        PdhGetFormattedCounterArrayW(counter, 0x200, ref bytes, out count, 0);
+        query.Read(counter, 0x200, ref bytes, out count, 0);
         if (bytes == 0 || bytes > 1024*1024) return null;
         nint buffer = Marshal.AllocHGlobal((int)bytes);
         try
         {
-            if (PdhGetFormattedCounterArrayW(counter, 0x200, ref bytes, out count, buffer) != 0) return null;
+            if (query.Read(counter, 0x200, ref bytes, out count, buffer) != 0) return null;
             int? result = null; int size = Marshal.SizeOf<CounterItem>();
             for (int i = 0; i < count && (i+1)*size <= bytes; i++)
             {
@@ -67,13 +76,49 @@ public sealed class TemperatureSensors : IDisposable
         { if (nvml != 0) { NativeLibrary.Free(nvml); nvml = 0; } }
         return null;
     }
+    public void ReleaseGpu()
+    {
+        lock (gate) ReleaseGpuLocked();
+    }
+
+    internal void ReleaseSamplingResources()
+    {
+        lock (gate)
+        {
+            CloseCpuQuery();
+            ReleaseGpuLocked();
+        }
+    }
+
+    private void CloseCpuQuery()
+    {
+        query?.Dispose();
+        query = null;
+        counter = 0;
+    }
+
+    private void ReleaseGpuLocked()
+    {
+        if (nvml == 0) return;
+        try { shutdown?.Invoke(); }
+        finally
+        {
+            NativeLibrary.Free(nvml);
+            nvml = 0;
+            init = null;
+            shutdown = null;
+            handle = null;
+            temperature = null;
+        }
+    }
+
     public void Dispose()
     {
         lock (gate)
         {
             disposed = true;
-            if (query != 0) { PdhCloseQuery(query); query = 0; }
-            if (nvml != 0) { shutdown?.Invoke(); NativeLibrary.Free(nvml); nvml = 0; }
+            CloseCpuQuery();
+            ReleaseGpuLocked();
         }
     }
     [StructLayout(LayoutKind.Sequential)] private struct CounterValue { public uint Status; public double Value; }
@@ -82,9 +127,4 @@ public sealed class TemperatureSensors : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int NvShutdown();
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int NvHandle(uint index, out nint device);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int NvTemp(nint device, uint sensor, out uint value);
-    [DllImport("pdh.dll", CharSet = CharSet.Unicode)] private static extern uint PdhOpenQueryW(string? source, nuint user, out nint query);
-    [DllImport("pdh.dll", CharSet = CharSet.Unicode)] private static extern uint PdhAddEnglishCounterW(nint query, string path, nuint user, out nint counter);
-    [DllImport("pdh.dll")] private static extern uint PdhCollectQueryData(nint query);
-    [DllImport("pdh.dll")] private static extern uint PdhCloseQuery(nint query);
-    [DllImport("pdh.dll", CharSet = CharSet.Unicode)] private static extern uint PdhGetFormattedCounterArrayW(nint counter, uint format, ref uint bytes, out uint count, nint buffer);
 }

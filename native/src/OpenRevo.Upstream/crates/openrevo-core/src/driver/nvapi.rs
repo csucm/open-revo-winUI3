@@ -1,8 +1,6 @@
 // Native Pure-Rust NVIDIA NVAPI Driver Interface
 // Zero official Mechrevo DLL dependencies. Dynamically links to Windows C:\Windows\System32\nvapi64.dll.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
 use parking_lot::Mutex;
 
 const NVAPI_OK: i32 = 0;
@@ -41,9 +39,7 @@ type FnGPUGetThermalPolicies = unsafe extern "C" fn(usize, *mut u8) -> i32;
 
 struct NvApiBindings {
     _lib: libloading::Library,
-    _initialize: FnInitialize,
-    _unload: FnUnload,
-    _enum_physical_gpus: FnEnumPhysicalGPUs,
+    unload: FnUnload,
     get_full_name: FnGPUGetFullName,
     get_pstates20: FnGPUGetPstates20,
     set_pstates20: FnGPUSetPstates20,
@@ -52,14 +48,22 @@ struct NvApiBindings {
     primary_gpu_handle: usize,
 }
 
-static NVAPI: OnceLock<Option<NvApiBindings>> = OnceLock::new();
-static NVAPI_MUTEX: Mutex<()> = Mutex::new(());
-static IS_INITIALIZED: AtomicBool = AtomicBool::new(false);
+enum Driver {
+    Unloaded,
+    Unavailable,
+    Loaded(NvApiBindings),
+}
+
+// Hold this lock across every driver call, including unload. No handle or
+// function pointer can outlive the session that provided it.
+static NVAPI: Mutex<Driver> = Mutex::new(Driver::Unloaded);
 
 fn load_nvapi() -> Option<NvApiBindings> {
     unsafe {
         // Look in System32
-        let lib = libloading::Library::new("nvapi64.dll").ok()?;
+        use libloading::os::windows::{Library, LOAD_LIBRARY_SEARCH_SYSTEM32};
+        let lib: libloading::Library =
+            Library::load_with_flags("nvapi64.dll", LOAD_LIBRARY_SEARCH_SYSTEM32).ok()?.into();
         let query_interface: libloading::Symbol<FnQueryInterface> = lib.get(b"nvapi_QueryInterface\0").ok()?;
 
         let get_proc = |id: u32| -> Option<*const ()> {
@@ -99,27 +103,20 @@ fn load_nvapi() -> Option<NvApiBindings> {
         let mut handles = [0usize; 64];
         let mut count = 0u32;
         let enum_ret = enum_physical_gpus(handles.as_mut_ptr(), &mut count);
-        if enum_ret != NVAPI_OK || count == 0 {
-            crate::log_warn!("NVAPI", "NvAPI_EnumPhysicalGPUs found 0 GPUs or returned {}", enum_ret);
-            return None;
+        let primary_gpu_handle = if enum_ret == NVAPI_OK && (1..=handles.len() as u32).contains(&count) {
+            handles[0]
+        } else {
+            0
+        };
+        if primary_gpu_handle == 0 {
+            crate::log_warn!("NVAPI", "NvAPI_EnumPhysicalGPUs returned {} with {} GPUs", enum_ret, count);
         }
 
-        let primary_gpu_handle = handles[0];
-        let mut name_buf = [0u8; 64];
-        if get_full_name(primary_gpu_handle, name_buf.as_mut_ptr()) == NVAPI_OK {
-            let name = String::from_utf8_lossy(&name_buf)
-                .trim_matches(char::from(0))
-                .to_string();
-            crate::log_info!("NVAPI", "Native NVAPI initialized successfully for GPU: {} (handle: 0x{:X})", name, primary_gpu_handle);
-        }
-
-        IS_INITIALIZED.store(true, Ordering::SeqCst);
-
+        // Keep the initialized session even if enumeration failed so the
+        // initialization reference can still be released at transaction end.
         Some(NvApiBindings {
             _lib: lib,
-            _initialize: initialize,
-            _unload: unload,
-            _enum_physical_gpus: enum_physical_gpus,
+            unload,
             get_full_name,
             get_pstates20,
             set_pstates20,
@@ -130,21 +127,40 @@ fn load_nvapi() -> Option<NvApiBindings> {
     }
 }
 
-fn get_driver() -> Option<&'static NvApiBindings> {
-    NVAPI.get_or_init(load_nvapi).as_ref()
+fn with_driver<T>(call: impl FnOnce(&NvApiBindings) -> T) -> Option<T> {
+    let mut driver = NVAPI.lock();
+    if matches!(*driver, Driver::Unloaded) {
+        *driver = load_nvapi().map_or(Driver::Unavailable, Driver::Loaded);
+    }
+    match &*driver {
+        Driver::Loaded(bindings) if bindings.primary_gpu_handle != 0 => Some(call(bindings)),
+        _ => None,
+    }
+}
+
+/// Releases the resident's driver session after its queued transaction settles.
+/// Keep the library and the initialization reference if the driver refuses to unload.
+pub fn release_session() {
+    let mut driver = NVAPI.lock();
+    if let Driver::Loaded(bindings) = &*driver {
+        let status = unsafe { (bindings.unload)() };
+        if status != NVAPI_OK {
+            crate::log_warn!("NVAPI", "NvAPI_Unload returned error code: {}", status);
+            return;
+        }
+    }
+    *driver = Driver::Unloaded;
 }
 
 /// Query whether NVAPI is available on the current machine
 pub fn is_nvapi_available() -> bool {
-    get_driver().is_some()
+    with_driver(|_| ()).is_some()
 }
 
 /// Retrieve the GPU model name directly from NVIDIA driver
 pub fn get_gpu_full_name() -> Option<String> {
-    let drv = get_driver()?;
-    let _guard = NVAPI_MUTEX.lock();
-    let mut name_buf = [0u8; 64];
-    unsafe {
+    with_driver(|drv| unsafe {
+        let mut name_buf = [0u8; 64];
         if (drv.get_full_name)(drv.primary_gpu_handle, name_buf.as_mut_ptr()) == NVAPI_OK {
             let name = String::from_utf8_lossy(&name_buf)
                 .trim_matches(char::from(0))
@@ -153,7 +169,7 @@ pub fn get_gpu_full_name() -> Option<String> {
         } else {
             None
         }
-    }
+    })?
 }
 
 /// Apply a single clock offset (Core or Memory) via NvAPI_GPU_SetPstates20
@@ -189,10 +205,7 @@ unsafe fn set_single_clock_offset_raw(
 /// core_offset_mhz: Offset in MHz (e.g. +100 MHz, or 0 to reset)
 /// mem_offset_mhz:  Offset in MHz (e.g. +200 MHz, or 0 to reset)
 pub fn set_gpu_clock_offsets(core_offset_mhz: i32, mem_offset_mhz: i32) -> Result<(), String> {
-    let drv = get_driver().ok_or_else(|| "NVIDIA NVAPI driver not found or not supported".to_string())?;
-    let _guard = NVAPI_MUTEX.lock();
-
-    unsafe {
+    with_driver(|drv| unsafe {
         let state=read_clock_state_raw(drv).ok_or("Clock capabilities unavailable")?;
         if !state.allows(core_offset_mhz,mem_offset_mhz){return Err("Clock target outside editable driver range".to_string());}
         // 1. Set Core Clock Offset (Graphics Core, Domain 0)
@@ -213,7 +226,7 @@ pub fn set_gpu_clock_offsets(core_offset_mhz: i32, mem_offset_mhz: i32) -> Resul
             core_offset_mhz, mem_offset_mhz
         );
         Ok(())
-    }
+    }).ok_or_else(|| "NVIDIA NVAPI driver not found or not supported".to_string())?
 }
 
 /// Reset all GPU Clock Offsets to factory default (+0 MHz)
@@ -270,26 +283,22 @@ unsafe fn read_clock_state_raw(drv:&NvApiBindings)->Option<NativeClockState> {
     parse_native_clock_state(&words)
 }
 pub fn get_gpu_clock_state()->Option<NativeClockState> {
-    let drv=get_driver()?;let _guard=NVAPI_MUTEX.lock();unsafe{read_clock_state_raw(drv)}
+    with_driver(|drv| unsafe { read_clock_state_raw(drv) })?
 }
 
 /// Set GPU Thermal Limit / Temperature Wall in Celsius (e.g. 87°C)
 pub fn set_gpu_thermal_limit(celsius: u32) -> Result<(), String> {
-    let drv = get_driver().ok_or_else(|| "NVIDIA NVAPI driver not found".to_string())?;
-    let set_thermal = drv.set_thermal_policies.ok_or_else(|| "Thermal policies not supported".to_string())?;
-    let _guard = NVAPI_MUTEX.lock();
+    with_driver(|drv| unsafe {
+        let set_thermal = drv.set_thermal_policies.ok_or_else(|| "Thermal policies not supported".to_string())?;
 
-    // Struct: size 780 bytes (0x030C), version 0x0002030C
-    let mut buf = vec![0u8; 780];
-    let u32_slice = unsafe {
-        std::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u32, 780 / 4)
-    };
-    u32_slice[0] = 0x0002030C; // Version 2
-    u32_slice[2] = 1;          // numPolicies = 1
-    u32_slice[3] = 6;          // Target: GPU
-    u32_slice[5] = celsius.clamp(65, 95); // Thermal limit Celsius
+        // Struct: size 780 bytes (0x030C), version 0x0002030C
+        let mut buf = vec![0u8; 780];
+        let u32_slice = std::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u32, 780 / 4);
+        u32_slice[0] = 0x0002030C; // Version 2
+        u32_slice[2] = 1;          // numPolicies = 1
+        u32_slice[3] = 6;          // Target: GPU
+        u32_slice[5] = celsius.clamp(65, 95); // Thermal limit Celsius
 
-    unsafe {
         let ret = set_thermal(drv.primary_gpu_handle, buf.as_ptr());
         if ret == NVAPI_OK {
             crate::log_info!("NVAPI", "GPU Thermal limit set to {}°C", celsius);
@@ -297,5 +306,5 @@ pub fn set_gpu_thermal_limit(celsius: u32) -> Result<(), String> {
         } else {
             Err(format!("NVAPI Set Thermal Policies failed: error code {}", ret))
         }
-    }
+    }).ok_or_else(|| "NVIDIA NVAPI driver not found".to_string())?
 }

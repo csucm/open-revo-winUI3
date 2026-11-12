@@ -28,7 +28,8 @@ internal sealed class WindowsGpuTelemetry : IDisposable
     private string selection = "not-requested";
     private string? displayLuid, displayTargetLuid;
     private string samplingState = "not-requested";
-    private nint query, engine, shared, dedicated;
+    private PerformanceCounterQuery? query;
+    private nint engine, shared, dedicated;
     private uint? queryStatus, engineStatus, sharedStatus, dedicatedStatus;
     private int generation = -1, emptySamples;
     private bool? declaration;
@@ -98,8 +99,8 @@ internal sealed class WindowsGpuTelemetry : IDisposable
             return null;
         }
 
-        if (query != 0 && now - lastCollection > TimeSpan.FromSeconds(10)) CloseQuery();
-        if (query == 0 && (last == null || now >= retryAt))
+        if (query != null && now - lastCollection > TimeSpan.FromSeconds(10)) CloseQuery();
+        if (query == null && (last == null || now >= retryAt))
         {
             retryAt = now.AddSeconds(30);
             OpenQuery();
@@ -108,16 +109,16 @@ internal sealed class WindowsGpuTelemetry : IDisposable
         int? usage = null;
         ulong? sharedUsed = null, dedicatedUsed = null;
         samplingState = "query-unavailable";
-        if (query != 0)
+        if (query is { } activeQuery)
         {
             bool warmed = lastCollection != default;
-            queryStatus = PdhCollectQueryData(query);
+            queryStatus = activeQuery.Collect();
             if (queryStatus == 0)
             {
                 lastCollection = now;
-                if (engine != 0 && warmed) usage = ReadEngine(selected.Luid);
-                if (shared != 0) sharedUsed = ReadMemory(shared, selected.Luid, selected.SharedBytes, ref sharedStatus);
-                if (dedicated != 0) dedicatedUsed = ReadMemory(dedicated, selected.Luid, selected.DedicatedBytes, ref dedicatedStatus);
+                if (engine != 0 && warmed) usage = ReadEngine(activeQuery, selected.Luid);
+                if (shared != 0) sharedUsed = ReadMemory(activeQuery, shared, selected.Luid, selected.SharedBytes, ref sharedStatus);
+                if (dedicated != 0) dedicatedUsed = ReadMemory(activeQuery, dedicated, selected.Luid, selected.DedicatedBytes, ref dedicatedStatus);
                 samplingState = !warmed ? "first-observation" :
                     usage.HasValue || sharedUsed.HasValue || dedicatedUsed.HasValue ? "sampled" : "no-matching-valid-counters";
                 if (warmed && usage == null && sharedUsed == null && dedicatedUsed == null)
@@ -259,24 +260,23 @@ internal sealed class WindowsGpuTelemetry : IDisposable
 
     private void OpenQuery()
     {
-        queryStatus = PdhOpenQueryW(null, 0, out nint opened);
-        if (queryStatus != 0) return;
-        query = opened;
-        engine = AddCounter(@"\GPU Engine(*)\Utilization Percentage", out engineStatus);
-        shared = AddCounter(@"\GPU Adapter Memory(*)\Shared Usage", out sharedStatus);
-        dedicated = AddCounter(@"\GPU Adapter Memory(*)\Dedicated Usage", out dedicatedStatus);
+        queryStatus = PerformanceCounterQuery.Open(out query);
+        if (query == null) return;
+        engine = AddCounter(query, @"\GPU Engine(*)\Utilization Percentage", out engineStatus);
+        shared = AddCounter(query, @"\GPU Adapter Memory(*)\Shared Usage", out sharedStatus);
+        dedicated = AddCounter(query, @"\GPU Adapter Memory(*)\Dedicated Usage", out dedicatedStatus);
         if (engine == 0 && shared == 0 && dedicated == 0) CloseQuery();
     }
 
-    private nint AddCounter(string path, out uint? status)
+    private static nint AddCounter(PerformanceCounterQuery query, string path, out uint? status)
     {
-        status = PdhAddEnglishCounterW(query, path, 0, out nint counter);
+        status = query.Add(path, out nint counter);
         return status == 0 ? counter : 0;
     }
 
-    private int? ReadEngine(string luid)
+    private int? ReadEngine(PerformanceCounterQuery query, string luid)
     {
-        var entries = ReadCounter(engine, ref engineStatus);
+        var entries = ReadCounter(query, engine, ref engineStatus);
         var engines = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, value) in entries)
         {
@@ -288,11 +288,11 @@ internal sealed class WindowsGpuTelemetry : IDisposable
         return engines.Count == 0 ? null : (int)Math.Round(Math.Clamp(engines.Values.Max(), 0, 100));
     }
 
-    private static ulong? ReadMemory(nint counter, string luid, ulong capacity, ref uint? status)
+    private static ulong? ReadMemory(PerformanceCounterQuery query, nint counter, string luid, ulong capacity, ref uint? status)
     {
         if (capacity == 0) return null;
         double? result = null;
-        foreach (var (name, value) in ReadCounter(counter, ref status, FormatBytes))
+        foreach (var (name, value) in ReadCounter(query, counter, ref status, FormatBytes))
         {
             string prefix = luid + "_phys_";
             bool matches = name.Equals(luid, StringComparison.OrdinalIgnoreCase) ||
@@ -305,17 +305,18 @@ internal sealed class WindowsGpuTelemetry : IDisposable
         return result.HasValue ? (ulong)result.Value : null;
     }
 
-    private static List<(string Name, double Value)> ReadCounter(nint counter, ref uint? status, uint format = FormatDoubleNoCap)
+    private static List<(string Name, double Value)> ReadCounter(PerformanceCounterQuery query,
+        nint counter, ref uint? status, uint format = FormatDoubleNoCap)
     {
         var entries = new List<(string, double)>();
         uint bytes = 0;
-        status = PdhGetFormattedCounterArrayW(counter, format, ref bytes, out _, 0);
+        status = query.Read(counter, format, ref bytes, out _, 0);
         if (status != MoreData || bytes == 0 || bytes > 4 * 1024 * 1024) return entries;
         nint buffer = Marshal.AllocHGlobal((int)bytes);
         try
         {
             uint allocated = bytes;
-            status = PdhGetFormattedCounterArrayW(counter, format, ref bytes, out uint count, buffer);
+            status = query.Read(counter, format, ref bytes, out uint count, buffer);
             if (status != 0 || bytes > allocated) return entries;
             int size = Marshal.SizeOf<CounterItem>();
             if ((long)count * size > bytes) return entries;
@@ -338,8 +339,9 @@ internal sealed class WindowsGpuTelemetry : IDisposable
 
     private void CloseQuery()
     {
-        if (query != 0) PdhCloseQuery(query);
-        query = engine = shared = dedicated = 0;
+        query?.Dispose();
+        query = null;
+        engine = shared = dedicated = 0;
         lastCollection = default;
     }
 
@@ -361,19 +363,16 @@ internal sealed class WindowsGpuTelemetry : IDisposable
 
     public void Dispose() => Reset();
 
+    internal void ReleaseSamplingResources()
+    {
+        Reset();
+        generation = -1;
+        candidates = [];
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct CounterValue { public uint Status; public double Number; }
     [StructLayout(LayoutKind.Sequential)]
     private struct CounterItem { public nint Name; public CounterValue Value; }
 
-    [DllImport("pdh.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
-    private static extern uint PdhOpenQueryW(string? source, nuint user, out nint query);
-    [DllImport("pdh.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
-    private static extern uint PdhAddEnglishCounterW(nint query, string path, nuint user, out nint counter);
-    [DllImport("pdh.dll", ExactSpelling = true)]
-    private static extern uint PdhCollectQueryData(nint query);
-    [DllImport("pdh.dll", ExactSpelling = true)]
-    private static extern uint PdhGetFormattedCounterArrayW(nint counter, uint format, ref uint bytes, out uint count, nint buffer);
-    [DllImport("pdh.dll", ExactSpelling = true)]
-    private static extern uint PdhCloseQuery(nint query);
 }

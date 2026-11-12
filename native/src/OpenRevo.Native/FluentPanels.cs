@@ -66,12 +66,15 @@ public sealed partial class MainWindow
         string? key=titleKey switch{"performanceTitle"=>"performance","gpuTitle"=>"gpu","refreshTitle"=>"refresh","lightingTitle"=>"lighting",_=>title=="电池健康"?"battery":null};
         return key==null?card:PanelAnchor(key,card);
     }
-    private Button MiniControl(string title, Func<object> operation, string explanation)
+    private Button MiniControl(string title, Func<object> operation, string explanation) =>
+        MiniAsyncControl(title, () => RunHardware(operation, "操作已回读确认。"), explanation);
+
+    private Button MiniAsyncControl(string title, Func<Task> operation, string explanation)
     {
         var button = Ui.Button(title, async (_, _) =>
         {
             if (!hardware.Active) return;
-            await RunHardware(operation, "操作已回读确认。");
+            await operation();
         });
         ToolTipService.SetToolTip(button, explanation);
         if (mini && button.Content is StackPanel content)
@@ -95,15 +98,14 @@ public sealed partial class MainWindow
         page.Children.Add(lightingCard);
         Button Charge(string label, int limit)
         {
-            var button = MiniControl(label, () => hardware.ApplyBatteryCommand(limit), limit switch { 60=>"充至60%停止，低于55%恢复；不主动放电",80=>"充至80%停止，低于75%恢复；不主动放电",_=>"允许充满，适合外出使用" });
+            var button = MiniAsyncControl(label, () => SetChargeLimit(limit), limit switch { 60=>"充至60%停止，低于55%恢复；不主动放电",80=>"充至80%停止，低于75%恢复；不主动放电",_=>"允许充满，适合外出使用" });
             compactChargeButtons[limit] = button; return button;
         }
         page.Children.Add(Group("", "电池健康", Columns(Charge("工作站", 60), Charge("平衡", 80), Charge("长效", 100))));
         compactBoostButton = Ui.Button("\n一键强冷", async (_, _) =>
         {
-            bool target = (hardware.State?.FanBoost ?? ec.FanBoost) != true;
             if (!hardware.Active) return;
-            await RunHardware(() => hardware.ApplyFanBoostCommand(target), hardware.CoreDelegated?"Core 已发送强冷命令。":"强冷状态已回读确认。");
+            await ToggleFanBoost(ec.FanBoost);
         });
         compactBoostButton.IsEnabled = !hardwareBusy && hardware.Active&&hardware.SupportsFanBoost;
         ToolTipService.SetToolTip(compactBoostButton,"点击提高风扇转速，再次点击恢复自动散热");

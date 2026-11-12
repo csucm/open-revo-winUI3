@@ -1,5 +1,7 @@
 # 原生扩展小接口（方案①）
 
+本文只描述旧的可信内置接口。新的第三方沙箱框架见[NATIVE-PLUGIN-FRAMEWORK.md](NATIVE-PLUGIN-FRAMEWORK.md)，开发说明见[plugin-dev/README.md](plugin-dev/README.md)。两套API不能互换；本文关于没有IPC/第三方运行器的描述只适用于该旧接口。新框架源码已有，但真实隔离和界面尚未验收。
+
 2026-11-02，REQ-124。实现于C#主线；未修改C++原型。方案①对应候选A；方案③对应候选C，等待具体旧网页插件需求。
 
 ## 已实现范围

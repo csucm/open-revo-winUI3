@@ -158,7 +158,9 @@ public sealed partial class MainWindow
         var next = miniDraft.Copy();
         try
         {
-            if (!uiReviewMode) await Task.Run(() => MiniLayout.Save(next, miniReplaceUnrecognized));
+            if (residentClient != null)
+                await SaveResidentLayoutAsync(new(Mini: new(next.Top, next.Quick), ReplaceUnrecognized: miniReplaceUnrecognized));
+            else if (!uiReviewMode) await Task.Run(() => MiniLayout.Save(next, miniReplaceUnrecognized));
             if (closed) return false;
             miniLayoutRead = new(next.Copy(), null); miniDraft = null; miniUndo.Clear(); miniUndoPools.Clear(); miniSelection = null; miniReplaceUnrecognized = false;
             miniEditorNotice = "小面板布局已保存。"; if (render) RenderMiniEditorPreservingScroll(); return true;
@@ -251,12 +253,12 @@ public sealed partial class MainWindow
         {
             string? id = MiniEditingLayout.Quick[i];
             FrameworkElement body = id != null && (miniDraft != null || MiniSupported(id))
-                ? MiniReadOnly(() => PaintQuickRow(id, true, true)) : Paint.Stack(2, Paint.Text(miniDraft != null ? "＋" : "", 16), Paint.Text(miniDraft != null ? "添加" : "", 12));
+                ? MiniReadOnly(() => PaintQuickRow(id, true, true)) : MiniEmptyQuickPlaceholder(miniDraft != null);
             quick.Add(MakeMiniEditItem("quick", i, id, body));
         }
         preview.Children.Add(quick);
         preview.Children.Add(Paint.Between(MiniReadOnly(() => PT(() => identity.Board == "未知" ? "机型待读取" : identity.Board, 12, muted: true)),
-            MiniReadOnly(() => PT(() => hardware.Active ? "● 已接管" : "● 未接管", 12, muted: true))));
+            MiniReadOnly(() => PT(() => PanelHardwareActive ? "● 已接管" : "● 未接管", 12, muted: true))));
         var frame = Paint.Card(preview, 11, 12); frame.Width = 400; frame.HorizontalAlignment = HorizontalAlignment.Center;
         var stage = PaintSection("小面板预览", "display", new MiniPreviewScale(frame));
         miniQuickLibraryBoard = null;
@@ -292,6 +294,14 @@ public sealed partial class MainWindow
         }
         // Page unload also covers teardown that does not pass through Render().
         var scope = miniPreview; workspace.Unloaded += (_, _) => scope.Dispose();
+    }
+    private static FrameworkElement MiniEmptyQuickPlaceholder(bool editable)
+    {
+        var plus = Paint.Text(editable ? "＋" : "", 16);
+        var label = Paint.Text(editable ? "添加" : "", 12);
+        plus.TextAlignment = label.TextAlignment = TextAlignment.Center;
+        plus.HorizontalAlignment = label.HorizontalAlignment = HorizontalAlignment.Stretch;
+        return Paint.Stack(2, plus, label);
     }
     private MiniEditItem MakeMiniEditItem(string group, int index, string? id, FrameworkElement body)
     {

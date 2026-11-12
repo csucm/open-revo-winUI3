@@ -20,6 +20,9 @@ public sealed partial class MainWindow
     }
     private void RenderPlugins()
     {
+#if NATIVE_PLUGIN_FOLDER_ENTRY
+        RenderNativePluginFolders();
+#else
         EnsureExtensionHost();
         var client = summaryExtension!;
         var capabilities = client.QueryCapabilities();
@@ -78,12 +81,10 @@ public sealed partial class MainWindow
         body.Loaded += (_, _) => { loaded = true; Subscribe(); };
         body.Unloaded += (_, _) => { loaded = false; subscription?.Dispose(); subscription = null; };
         page.Children.Add(DetailSection("内置状态摘要", body));
-        page.Children.Add(DetailGrid(DetailSection("原生扩展能力",SuiteVisuals.Stack(0,
+        page.Children.Add(DetailSection("原生扩展能力",SuiteVisuals.Stack(0,
             SuiteSettingRow("状态订阅","面板与扩展共享状态。",Ui.Text("已提供",12,muted:true)),
             SuiteSettingRow("页面跳转与配置保存","独立配置；失败保留旧文件。",Ui.Text("已提供",12,muted:true)),
-            SuiteSettingRow("硬件控制","暂未向扩展开放。",Ui.Text("未开放",12,muted:true)))),
-            DetailSection("网页插件兼容",SuiteVisuals.Stack(0,
-            SuiteSettingRow("旧网页插件","HTML / CSS / JavaScript 插件当前不能直接运行。",Ui.Text("未接入",12,muted:true)),
-            SuiteSettingRow("插件市场","不展示安装入口或假列表。",Ui.Text("未接入",12,muted:true))))));
+            SuiteSettingRow("内置示例的硬件控制","此示例只读取状态。",Ui.Text("未开放",12,muted:true)))));
+#endif
     }
 }

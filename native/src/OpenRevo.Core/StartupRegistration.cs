@@ -1,21 +1,10 @@
 using Microsoft.Win32;
-using System.Runtime.InteropServices;
-using System.Security.Principal;
 using System.Xml.Linq;
 
 namespace OpenRevo.Core;
 
-public sealed record StartupTaskInspection(bool Owned,bool Matches,bool Enabled,string[] Differences,object? Fields=null);
-
-public static class StartupRegistration
+public static partial class StartupRegistration
 {
-    private const string KeyPath=@"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName="OpenRevoNative";
-    private static string Sid=>WindowsIdentity.GetCurrent().User!.Value;
-    private static string TaskName=>"OpenRevoNative-"+Sid;
-    public static bool MatchesLegacyCommand(string? command,string executable)=>
-        Path.IsPathFullyQualified(executable)&&Path.GetFileName(executable)=="OpenRevo.Native.exe"&&!executable.Contains('"')&&
-        string.Equals(command,$"\"{executable}\" --startup",StringComparison.OrdinalIgnoreCase);
     public static void MigrateLegacy()
     {
         using var key=Registry.CurrentUser.OpenSubKey(KeyPath);
@@ -41,52 +30,16 @@ public static class StartupRegistration
             E("Settings",new[]{E("MultipleInstancesPolicy","IgnoreNew"),E("DisallowStartIfOnBatteries","false"),E("StopIfGoingOnBatteries","false"),E("AllowStartOnDemand","true"),E("Enabled","true"),E("ExecutionTimeLimit","PT0S")}),
             new XElement(ns+"Actions",new XAttribute("Context","Console"),E("Exec",new[]{E("Command",executable),E("Arguments","--startup"),E("WorkingDirectory",Path.GetDirectoryName(executable))}))).ToString();
     }
-    public static StartupTaskInspection InspectTask(string xml,string executable,string sid,Func<string,string?>? resolveIdentity=null)
-    {
-        var task=XElement.Parse(xml);XNamespace ns=task.Name.Namespace;var differences=new List<string>();
-        var principal=task.Element(ns+"Principals")?.Element(ns+"Principal");
-        var actions=task.Element(ns+"Actions");var exec=actions?.Element(ns+"Exec");
-        var triggers=task.Element(ns+"Triggers");var logon=triggers?.Element(ns+"LogonTrigger");
-        string Value(XElement? parent,string name)=>((string?)parent?.Element(ns+name))?.Trim()??"";
-        bool Identity(string value)
-        {
-            if(string.Equals(value,sid,StringComparison.OrdinalIgnoreCase))return true;if(string.IsNullOrWhiteSpace(value))return false;
-            try{return string.Equals(resolveIdentity!=null?resolveIdentity(value):new NTAccount(value).Translate(typeof(SecurityIdentifier)).Value,sid,StringComparison.OrdinalIgnoreCase);}catch(IdentityNotMappedException){return false;}catch(ArgumentException){return false;}
-        }
-        bool PathMatch(string value){try{return Path.IsPathFullyQualified(value.Trim('"'))&&string.Equals(Path.GetFullPath(value.Trim('"')),Path.GetFullPath(executable),StringComparison.OrdinalIgnoreCase);}catch(ArgumentException){return false;}}
-        bool Enabled(XElement? parent){string value=Value(parent,"Enabled");return value.Length==0||value is "true" or "1";}
-        void Require(bool ok,string field){if(!ok)differences.Add(field);}
-        bool singleAction=actions?.Elements().Count()==1&&exec!=null;
-        bool singleTrigger=triggers?.Elements().Count()==1&&logon!=null;
-        bool principalMatch=task.Element(ns+"Principals")?.Elements().Count()==1&&Identity(Value(principal,"UserId"));
-        bool pathMatch=PathMatch(Value(exec,"Command")),arguments=Value(exec,"Arguments")=="--startup";
-        bool owned=task.Name.LocalName=="Task"&&ns.NamespaceName=="http://schemas.microsoft.com/windows/2004/02/mit/task"&&singleAction&&singleTrigger&&principalMatch&&pathMatch&&arguments;
-        Require(task.Name.LocalName=="Task"&&ns.NamespaceName=="http://schemas.microsoft.com/windows/2004/02/mit/task","task.schema");
-        Require(singleAction,"actions.singleExec");Require(singleTrigger,"triggers.singleLogon");Require(principalMatch,"principal.currentUser");Require(pathMatch,"exec.path");Require(arguments,"exec.arguments");
-        Require(Value(principal,"RunLevel")=="HighestAvailable","principal.runLevel");Require(Value(principal,"LogonType")=="InteractiveToken","principal.logonType");Require(Identity(Value(logon,"UserId")),"trigger.currentUser");
-        string context=(string?)actions?.Attribute("Context")??"",principalId=(string?)principal?.Attribute("id")??"";
-        Require(context.Length==0||string.Equals(context,principalId,StringComparison.Ordinal),"actions.principalContext");
-        bool enabled=Enabled(logon)&&Enabled(task.Element(ns+"Settings"));Require(Enabled(logon),"trigger.enabled");Require(Enabled(task.Element(ns+"Settings")),"settings.enabled");
-        string IdentityFormat(string value)=>value.Length==0?"missing":value.StartsWith("S-1-",StringComparison.OrdinalIgnoreCase)?"sid":"account-name";
-        return new(owned,differences.Count==0,enabled,differences.ToArray(),new{actualRunLevel=Value(principal,"RunLevel"),actualLogonType=Value(principal,"LogonType"),taskEnabledXml=Value(task.Element(ns+"Settings"),"Enabled"),triggerEnabledXml=Value(logon,"Enabled"),principalIdentityFormat=IdentityFormat(Value(principal,"UserId")),triggerIdentityFormat=IdentityFormat(Value(logon,"UserId")),actionCount=actions?.Elements().Count(),triggerCount=triggers?.Elements().Count(),pathMatches=pathMatch,argumentsMatch=arguments});
-    }
     public static bool MatchesTask(string xml,string executable,string sid)=>InspectTask(xml,executable,sid).Matches;
     public static object? LastInspection{get;private set;}
-    private static dynamic Connect()
-    {
-        dynamic service=Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service")!)!;
-        try{service.Connect();return service;}catch{Marshal.FinalReleaseComObject(service);throw;}
-    }
-    private static string? ReadTask(dynamic folder)
-    {
-        object? task=null;
-        try{task=folder.GetTask(TaskName);return ((dynamic)task).Xml;}
-        catch(COMException error)when(error.HResult==unchecked((int)0x80070002)){return null;}
-        catch(FileNotFoundException){return null;}
-        finally{Release(task);}
-    }
     public static bool IsEnabled()
     {
+        if (InstalledLaunchTasks.HasInstallation(AppContext.BaseDirectory))
+        {
+            bool enabled = InstalledLaunchTasks.IsLogonEnabled(Path.GetDirectoryName(Executable())!);
+            LastInspection = new { at = DateTimeOffset.UtcNow, installedLogon = true, enabled };
+            return enabled;
+        }
         object? service=null,folder=null;
         try
         {
@@ -98,8 +51,62 @@ public static class StartupRegistration
         catch(Exception error){DiagnosticLog.Failure("startup.query",error,throttle:true);throw;}
         finally{Release(folder);Release(service);}
     }
+
+    public static void ValidateResidentInstallation(string directory)
+    {
+        directory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        if (!directory.Equals(Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory), StringComparison.OrdinalIgnoreCase) ||
+            !InstalledLaunchTasks.HasInstallation(directory) || !File.Exists(Path.Combine(directory, "unins000.exe")))
+            throw new IOException("当前路径没有有效的 Open-Revo 安装登记。");
+        ProtectedInstallDirectory.Prepare(directory, create: false);
+        InstalledLaunchTasks.RequireResidentBootstrap(directory);
+    }
+
+    public static bool ReadResidentLogon(string directory)
+    {
+        ValidateResidentInstallation(directory);
+        return InstalledLaunchTasks.IsLogonEnabled(directory);
+    }
+
+    public static string PrepareResidentUpdateCache(string directory)
+    {
+        ValidateResidentInstallation(directory);
+        var cache = ProtectedInstallDirectory.CheckLocation(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)) + ".openrevo-updates");
+        if (!cache.Exists) ProtectedInstallDirectory.CreateProtected(cache);
+        ProtectedInstallDirectory.Check(cache);
+        return cache.FullName;
+    }
+
+    public static void ValidateResidentUpdatePayload(string directory, string payload)
+    {
+        string cache = PrepareResidentUpdateCache(directory);
+        var file = new FileInfo(payload);
+        var staging = file.Directory;
+        if (staging?.Parent == null ||
+            !cache.Equals(staging.Parent.FullName, StringComparison.OrdinalIgnoreCase) ||
+            !Guid.TryParseExact(staging.Name, "N", out _) ||
+            !file.Name.Equals("Open-Revo-Setup-x64.exe", StringComparison.OrdinalIgnoreCase))
+            throw new IOException("安装包路径不属于受保护的更新目录。");
+        ProtectedInstallDirectory.Check(staging);
+        ProtectedInstallDirectory.Check(file);
+    }
+
+    public static bool SetResidentLogon(string directory, bool enabled)
+    {
+        ValidateResidentInstallation(directory);
+        InstalledLaunchTasks.SetLogon(directory, enabled);
+        return InstalledLaunchTasks.IsLogonEnabled(directory);
+    }
     public static void SetEnabled(bool enabled)
     {
+        if (InstalledLaunchTasks.HasInstallation(AppContext.BaseDirectory))
+        {
+            string directory = Path.GetDirectoryName(Executable())!;
+            ProtectedInstallDirectory.Prepare(directory, create: false);
+            InstalledLaunchTasks.SetLogon(directory, enabled);
+            return;
+        }
         using var operation=DiagnosticLog.Begin("startup.registration",new{enabled});
         object? service=null,folder=null,registered=null;
         try
@@ -131,10 +138,17 @@ public static class StartupRegistration
         catch(Exception error){operation.Fail(error,new{lastReadback=LastInspection});throw;}
         finally{Release(registered);Release(folder);Release(service);}
     }
+    public static void MigrateInstalledLogon(string previousDirectory) =>
+        MigrateInstalledLogon(Path.GetDirectoryName(Executable())!, previousDirectory);
     // TASK_VALIDATE_ONLY checks the real scheduler schema without registering
     // a task or altering the user's startup choice.
     public static void ValidateConfiguration()
     {
+        if (InstalledLaunchTasks.HasInstallation(AppContext.BaseDirectory))
+        {
+            InstalledLaunchTasks.ValidateLogon(Path.GetDirectoryName(Executable())!);
+            return;
+        }
         object? service=null,folder=null,validation=null;
         try
         {
@@ -143,5 +157,4 @@ public static class StartupRegistration
         }
         finally{Release(validation);Release(folder);Release(service);}
     }
-    private static void Release(object? value){if(value!=null&&Marshal.IsComObject(value))Marshal.FinalReleaseComObject(value);}
 }

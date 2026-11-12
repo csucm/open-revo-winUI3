@@ -6,11 +6,12 @@ using System.Text.Json;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
-    private readonly DesktopServicePreferences desktopPreferences=DesktopServicePreferences.Load();
     private readonly Dictionary<string,ToggleSwitch> desktopPowerSwitches=[];
     private readonly Dictionary<string,TextBlock> desktopPowerHints=[];
     private PowerPolicyValue[] powerPolicies=[];
-    private JsonElement servicePower,serviceLighting,serviceColor,serviceIcc;
+    private JsonElement serviceLighting,serviceIcc;
+    private DesktopPowerState? servicePower;
+    private ColorServiceState? serviceColor;
     private readonly HashSet<string> desktopBusyServices=[];
     private string? desktopRunningService;
     private Func<string,Task>? desktopServiceReviewExecutor;
@@ -20,21 +21,36 @@ public sealed partial class MainWindow
     private bool syncingDesktopServices,desktopServicesReading;
     private DateTimeOffset lastDesktopServicesRead;
     private string desktopServiceError="";
-    private int linkedPerformanceMode;
-    private bool closingDesktopRuntime,desktopRuntimeClosed;
+    private enum DesktopServiceResult { Skipped, Succeeded, Failed }
+    private sealed record DesktopServiceOutcome(DesktopServiceResult Result,string? Failure=null);
+    private bool closingDesktopRuntime,desktopRuntimeClosed,hardwareRuntimeReleased;
     private async Task CloseDesktopRuntime()
     {
         if(closingDesktopRuntime)return;closingDesktopRuntime=true;
         DiagnosticLog.Record("exit.services.started");
-        try{if(upstream!=null)await Task.Run(upstream.StopDesktopServices);desktopRuntimeClosed=true;DiagnosticLog.Record("exit.services.completed");if(!closed){StartPendingUpdate();Close();}}
+        try
+        {
+            operationQueue.StopAccepting();
+            await Task.Yield(); // Leave the AppWindow.Closing callback before closing again.
+            if(!desktopRuntimeClosed)await hardwareRuntime.StopDesktopServicesAsync();
+            desktopRuntimeClosed=true;
+            DiagnosticLog.Record("exit.services.completed");
+            if(closed)return;
+            StartPendingUpdate();
+            try{await hardwareRuntime.ReleaseAsync();}
+            catch(Exception error){DiagnosticLog.Failure("exit.hardware.release_failed",error);}
+            hardwareRuntimeReleased=true;
+            if(!closed)Close();
+        }
         catch(Exception error)
         {
             DiagnosticLog.Failure("exit.services.failed",error,new{trayHidden,mini});
-            if(!closed)
+            if(!closed&&!hardwareRuntimeReleased)
             {
                 // Recovery must precede the modal await. Otherwise a tray-hidden
                 // window waits for an invisible dialog while rejecting all wakes.
                 exitRequested=false;
+                if(!sessionEnding)operationQueue.Resume();
                 WakeFromTray(mini?"mini":"full");
                 DiagnosticLog.Record("exit.recovery.visible",new{mini});
                 await ShowMessage("退出前恢复桌面状态",error.Message);
@@ -45,10 +61,10 @@ public sealed partial class MainWindow
     private async Task InitializeDesktopServicesRuntime()
     {
         await ReadDesktopServices(true);while(desktopServicesReading&&!closed)await Task.Delay(30);
-        if(!closed&&upstream!=null&&JsonBool(serviceColor,"enabled"))
+        if(!closed&&upstream!=null&&serviceColor?.SavedEnabled==true)
         {
-            var preset=serviceColor.GetProperty("active_preset").Clone();
-            await DesktopServiceAction("restore-saved-color",()=>upstream.ExecuteFeature(7,new{enabled=true,preset}));
+            var preset=serviceColor!.ActivePreset.Copy();
+            await DesktopServiceAction("restore-saved-color",()=>hardwareRuntime.Desktop.ApplyColor(true,preset));
         }
     }
     private ToggleSwitch ServiceToggle(string name,bool enabled,RoutedEventHandler handler)
@@ -70,7 +86,7 @@ public sealed partial class MainWindow
         desktopServicesReading=true;lastDesktopServicesRead=DateTimeOffset.Now;
         try
         {
-            var state=await Task.Run(()=>(policies:DesktopPower.ReadPolicies(),power:upstream.Read(13),lighting:upstream.Read(15),color:upstream.Read(16),icc:upstream.Read(14)));
+            var state=await Task.Run(()=>(policies:DesktopPower.ReadPolicies(),power:upstream.ReadDesktopPower(),lighting:upstream.Read(15),color:upstream.ReadColorService(),icc:upstream.Read(14)));
             powerPolicies=state.policies;servicePower=state.power;serviceLighting=state.lighting;serviceColor=state.color;serviceIcc=state.icc;desktopServiceError="";
         }
         catch(Exception error){desktopServiceError=error.Message;actions.Add("服务读取："+error.Message);}
@@ -78,13 +94,12 @@ public sealed partial class MainWindow
     }
     private bool? PowerServiceValue(string key)=>key switch
     {
-        "office"=>desktopPreferences.SleepOffice,"link"=>desktopPreferences.PerformanceLink,
+        "office"=>performance.SleepOfficeEnabled,"link"=>performance.PowerLinkEnabled,
         "master"=>powerPolicies.Any(p=>p.Supported)?powerPolicies.Where(p=>p.Supported).All(p=>p.Enabled==true):null,
-        "usb"=>JsonByte(servicePower,"trigger") is byte trigger?(trigger&Vault.UsbChargeMask)!=0:null,
-        "recovery"=>JsonByte(servicePower,"recovery") is byte recovery?(recovery&Vault.AcRecoveryMask)!=0:null,
+        "usb"=>servicePower?.Trigger is byte trigger?(trigger&Vault.UsbChargeMask)!=0:null,
+        "recovery"=>servicePower?.Recovery is byte recovery?(recovery&Vault.AcRecoveryMask)!=0:null,
         _=>powerPolicies.SingleOrDefault(p=>p.Definition.Key==key)?.Enabled
     };
-    private static byte? JsonByte(JsonElement value,string key)=>value.ValueKind==JsonValueKind.Object&&value.TryGetProperty(key,out var item)&&item.ValueKind==JsonValueKind.Number&&item.TryGetByte(out byte number)?number:null;
     private static bool JsonBool(JsonElement value,string key)=>value.ValueKind==JsonValueKind.Object&&value.TryGetProperty(key,out var item)&&item.ValueKind==JsonValueKind.True;
     private string? PowerBusyOperation(string key)
     {
@@ -111,30 +126,43 @@ public sealed partial class MainWindow
         }
         finally{syncingDesktopServices=false;}
     }
-    private async Task DesktopServiceAction(string name,Action operation,bool takeover=false)
+    private async Task<DesktopServiceOutcome> DesktopServiceAction(string name,Action operation,bool takeover=false,bool showFailure=true)
     {
-        if(closed||upstream==null||!desktopBusyServices.Add(name))return;
+        if(closed||upstream==null||!desktopBusyServices.Add(name))return new(DesktopServiceResult.Skipped);
         SyncDesktopServiceGroup(name);
-        await operationQueue.WaitAsync();
+        if(!await operationQueue.EnterAsync())
+        {
+            desktopBusyServices.Remove(name);
+            if(!closed)SyncDesktopServiceGroup(name);
+            return new(DesktopServiceResult.Skipped);
+        }
         string? failure=null;
         using var trace=DiagnosticLog.Begin("desktop.service",new{name,takeover});
+        void RecordFailure(Exception error)
+        {
+            failure=error.Message;
+            trace.Fail(error);
+            actions.Add(name+"："+error);
+            if(actions.Count>128)actions.RemoveAt(0);
+        }
         try
         {
             while(desktopServicesReading&&!closed)await Task.Delay(30);
-            if(closed)return;
+            if(closed)return new(DesktopServiceResult.Skipped);
             desktopRunningService=name;SyncDesktopServiceGroup(name);
             try
             {
                 if(uiReviewMode&&desktopServiceReviewExecutor!=null)await desktopServiceReviewExecutor(name);
                 else await Task.Run(()=>hardware.ApplyDesktopService(name,operation,takeover));
             }
-            catch(Exception error){failure=error.Message;trace.Fail(error);actions.Add(name+"："+error);}
+            catch(Exception error){RecordFailure(error);}
             await RefreshDesktopServiceGroup(name);
         }
-        catch(Exception error){failure=error.Message;trace.Fail(error);actions.Add(name+"："+error);}
+        catch(Exception error){RecordFailure(error);}
         finally{desktopBusyServices.Remove(name);desktopRunningService=null;operationQueue.Release();if(!closed)SyncDesktopServiceGroup(name);}
         if(failure==null)trace.Complete();
-        if(failure!=null&&!closed)await ShowMessage("设置未完成",failure);
+        if(failure!=null&&!closed&&showFailure)await ShowMessage("设置未完成",failure);
+        return new(failure==null?DesktopServiceResult.Succeeded:DesktopServiceResult.Failed,failure);
     }
     private void SyncDesktopServiceGroup(string name)
     {
@@ -145,12 +173,12 @@ public sealed partial class MainWindow
     private async Task RefreshDesktopServiceGroup(string name)
     {
         if(upstream==null)return;
-        if(name is "power-usb" or "power-recovery")servicePower=await Task.Run(()=>upstream.Read(13));
+        if(name is "power-usb" or "power-recovery")servicePower=await Task.Run(()=>upstream.ReadDesktopPower());
         else if(name=="power-master"||DesktopPower.Policies.Any(p=>name=="power-"+p.Key))powerPolicies=await Task.Run(DesktopPower.ReadPolicies);
         else if(name.StartsWith("lighting-"))serviceLighting=await Task.Run(()=>upstream.Read(15));
         else if(!name.StartsWith("power-"))
         {
-            if(!name.StartsWith("icc-"))serviceColor=await Task.Run(()=>upstream.Read(16));
+            if(!name.StartsWith("icc-"))serviceColor=await Task.Run(()=>upstream.ReadColorService());
             serviceIcc=await Task.Run(()=>upstream.Read(14));
         }
     }
@@ -163,26 +191,58 @@ public sealed partial class MainWindow
     private async Task ChangePowerService(string key,bool target)
     {
         if(upstream==null)return;
-        await DesktopServiceAction("power-"+key,()=>
+        if(key is "office" or "link")
         {
-            switch(key)
+            if(uiReviewMode&&desktopServiceReviewExecutor!=null)
             {
-                case "office":desktopPreferences.SleepOffice=target;try{desktopPreferences.Save();}catch{desktopPreferences.SleepOffice=!target;throw;}break;
-                case "link":
-                    if(target){int mode=hardware.CurrentMode??throw new IOException("性能档位未读取。");DesktopPower.SetOverlay(upstream,mode);linkedPerformanceMode=mode;}
-                    desktopPreferences.PerformanceLink=target;try{desktopPreferences.Save();}catch{desktopPreferences.PerformanceLink=!target;throw;}break;
-                case "usb":case "recovery":hardware.SetDesktopPowerOption(upstream,key,target);break;
-                case "master":
-                    foreach(var p in DesktopPower.ReadPolicies().Where(p=>p.Supported))DesktopPower.SetPolicy(upstream,p.Definition.Key,target);break;
-                default:DesktopPower.SetPolicy(upstream,key,target);break;
+                await DesktopServiceAction("power-"+key,()=>{});
+                return;
             }
-        },key is "usb" or "recovery" or "office");
+            var policy=key=="office"?PerformanceDesktopPolicy.SleepOffice:PerformanceDesktopPolicy.PowerLink;
+            await RunDesktopPerformanceAction("power-"+key,()=>performance.SetDesktopPolicy(policy,target));
+            return;
+        }
+        await DesktopServiceAction("power-"+key,()=>hardwareRuntime.Desktop.SetPowerPolicy(key,target),key is "usb" or "recovery");
     }
     private async Task SyncPerformanceOverlay()
     {
-        int mode=hardware.CurrentMode??0;
-        if(!desktopPreferences.PerformanceLink||mode==0||mode==linkedPerformanceMode||desktopServiceBusy||hardwareBusy||quickBusy||tuningApplying||sleepOfficeBusy||upstream==null||!hardware.Active)return;
-        linkedPerformanceMode=mode;
-        await DesktopServiceAction("power-overlay",()=>DesktopPower.SetOverlay(upstream,mode));
+        if(desktopServiceBusy||hardwareBusy||quickBusy||tuningApplying||sleepOfficeBusy||!performance.ShouldSynchronizePowerLink)return;
+        await RunDesktopPerformanceAction("power-overlay",performance.SynchronizePowerLink);
+    }
+
+    private async Task RunDesktopPerformanceAction(string name,Func<DesktopPerformanceOperation> command)
+    {
+        if(closed||exitRequested||settingsDataBusy||dataStorageExitPending||!desktopBusyServices.Add(name))return;
+        SyncDesktopServiceGroup(name);
+        Exception? report=null;
+        using var trace=DiagnosticLog.Begin("desktop.service",new{name});
+        try
+        {
+            while(desktopServicesReading&&!closed&&!exitRequested)await Task.Delay(30);
+            if(closed||exitRequested)return;
+            var operation=command();
+            if(await operation.Started&&!operation.Completion.IsCompleted&&!closed)
+            {
+                desktopRunningService=name;
+                SyncDesktopServiceGroup(name);
+            }
+            var result=await operation.Completion;
+            var summary=new{result.Outcome,result.Mode};
+            if(result.Error is { } failure)
+            {
+                trace.Fail(failure,summary);
+                actions.Add(name+"："+failure);
+                if(actions.Count>128)actions.RemoveAt(0);
+            }
+            else trace.Complete(summary);
+            if(result.ReportFailure)report=result.Error;
+        }
+        finally
+        {
+            desktopBusyServices.Remove(name);
+            if(desktopRunningService==name)desktopRunningService=null;
+            if(!closed)SyncDesktopServiceGroup(name);
+        }
+        if(report!=null&&!closed&&!exitRequested)await ShowMessage("设置未完成",report.Message);
     }
 }

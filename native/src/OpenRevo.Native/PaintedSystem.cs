@@ -1,12 +1,30 @@
-﻿using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using OpenRevo.Core;
+using OpenRevo.ResidentProtocol;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
     private FrameworkElement? paintOsdSample;
     private FrameworkElement PaintOsdPreview()
+    {
+        var host = new ContentControl { HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        (bool Enabled, string Theme, int Scale, string Position, bool Dark)? rendered = null;
+        void Update()
+        {
+            var current = (osdEnabled, systemPreferences.OsdTheme, systemPreferences.OsdScale,
+                systemPreferences.OsdPosition, Paint.Dark(root));
+            if (rendered == current) return;
+            host.Content = BuildPaintOsdPreview();
+            rendered = current;
+        }
+        Update();
+        paintBindings.Add(Update);
+        return host;
+    }
+
+    private FrameworkElement BuildPaintOsdPreview()
     {
         var scene=new Grid{MinHeight=200};var gradient=new LinearGradientBrush{StartPoint=new(0,0),EndPoint=new(1,1)};gradient.GradientStops.Add(new(){Offset=0,Color=Paint.Brush(Paint.Dark(root)?"354A64":"8196AB").Color});gradient.GradientStops.Add(new(){Offset=1,Color=Paint.Brush(Paint.Dark(root)?"202D40":"5E718A").Color});scene.Background=gradient;
         if(osdEnabled)
@@ -32,26 +50,51 @@ public sealed partial class MainWindow
     }
     private async Task PaintSwitchPlan(PowerPlan requested)
     {
-        if(uiReviewMode||upstream==null||settingsPowerBusy)return;settingsPowerBusy=true;await operationQueue.WaitAsync();
-        try{await Task.Run(()=>{var plans=new WindowsPowerPlans();Guid before=plans.Active();if(!plans.List().Any(p=>p.Id==requested.Id))throw new IOException("目标方案不存在。");if(plans.Active()!=before)throw new IOException("方案已被外部修改，请刷新。");upstream.ExecuteFeature(11,new{scheme=requested.Id.ToString("D")});if(plans.Active()!=requested.Id)throw new IOException("电源方案回读不一致。");});}
+        if(uiReviewMode||upstream==null||settingsPowerBusy)return;settingsPowerBusy=true;
+        if(!await operationQueue.EnterAsync()){settingsPowerBusy=false;return;}
+        try{await Task.Run(()=>hardwareRuntime.Desktop.SelectPowerPlan(requested.Id));}
         finally{settingsPowerBusy=false;operationQueue.Release();await PaintReadPlans();}
     }
     private async Task PaintRecoverPlans()
     {
         if(uiReviewMode||upstream==null||!hardware.Active||settingsPowerBusy)return;if(!await Confirm("修复 Windows 电源计划？","先备份全部方案，再重建内置计划并尝试恢复OEM调度。自建方案会检查保留，定制的内置参数和睡眠策略可能重置。不会自动重启。"))return;
-        settingsPowerBusy=true;await operationQueue.WaitAsync();try{string result=await Task.Run(()=>PowerPlanRecovery.Restore(upstream));await ShowMessage("电源计划恢复结果",result);}finally{settingsPowerBusy=false;operationQueue.Release();await PaintReadPlans();await ReadDesktopServices(true);}
+        settingsPowerBusy=true;
+        if(!await operationQueue.EnterAsync()){settingsPowerBusy=false;return;}
+        try{string result=await Task.Run(hardwareRuntime.Desktop.RecoverPowerPlans);await ShowMessage("电源计划恢复结果",result);}finally{settingsPowerBusy=false;operationQueue.Release();await PaintReadPlans();await ReadDesktopServices(true);}
     }
     private async Task PaintReadStartup(){if(uiReviewMode){paintStartup=false;return;}try{paintStartup=await Task.Run(StartupRegistration.IsEnabled);}catch{paintStartup=null;}RefreshPaintedState();}
     private async Task PaintTakeover(bool acquire)
     {
-        if(uiReviewMode||takeoverChanging||closed)return;takeoverChanging=true;automaticTakeoverPending=false;
-        try{if(!acquire){hardware.Release();tuningBaseline=null;tuningDraft=null;quickState=quickState with{Camera=null};hardwareMessage="已停止本次硬件控制。";return;}await RunHardware(()=>{var state=hardware.Takeover();if(!hardware.CoreDelegated)hardware.ProbePerformance();return new{connected=hardware.Active,state};},"已重新读取并接管。");if(hardware.Active){await LoadPanelHardware();ApplyQuickRead(await Task.Run(ReadQuickState));}}
+        if(uiReviewMode||takeoverChanging||closed)return;takeoverChanging=true;
+        try{if(!acquire){await ReleaseHardwareControl();return;}await TakeoverHardware();}
         finally{takeoverChanging=false;SynchronizeModeKeyMonitor();RefreshPaintedState();}
     }
     private void RenderPaintedUpdates()
     {
-        var check=PB("检查更新",async()=>{if(!uiReviewMode)await CheckNativeUpdate();});var install=PB("下载并安装",async()=>{if(!uiReviewMode)await DownloadNativeUpdate();});var cancel=new PaintButton("取消下载",()=>updateCancellation?.Cancel());paintBindings.Add(()=>{check.IsEnabled=!updateBusy;install.IsEnabled=!updateBusy&&availableUpdate!=null;cancel.IsEnabled=updateCancellation!=null;});
-        page.Children.Add(PaintSection("软件更新","info",Paint.Stack(14,PT(()=>BuildInfo.UpdateDescription,12,muted:true),Paint.Inline(8,check,install,cancel),PT(()=>updateMessage,12,muted:true),PB("发布页",()=>OpenSettings(ReleaseUpdater.ReleasesPage)),new PaintButton("打开下载与安装日志",()=>{if(!uiReviewMode)OpenLocalFolder(Path.Combine(AppData.DirectoryPath,"updates"));}))));
+        var check=PB("检查更新",async()=>{if(!uiReviewMode)await CheckNativeUpdate();});
+        var install=PB("下载并安装",async()=>{if(!uiReviewMode)await DownloadNativeUpdate();});
+        var cancel=PB(residentClient==null?"取消下载":"取消更新",async()=>
+        {
+            if(residentClient==null)updateCancellation?.Cancel();
+            else await RunResidentUpdateActionAsync(PanelApplicationAction.CancelUpdate);
+        });
+        paintBindings.Add(()=>
+        {
+            check.IsEnabled=!PaintUpdateBusy&&(residentClient==null||residentSnapshot?.Ready==true&&!ResidentUpdateRequestBusy);
+            install.IsEnabled=!PaintUpdateBusy&&(residentClient==null?availableUpdate!=null:
+                ResidentUpdate is { CanInstall:true, AvailableVersion:not null }&&!ResidentUpdateRequestBusy);
+            cancel.IsEnabled=residentClient==null?updateCancellation!=null:PaintUpdateBusy&&!PanelActionBusy(PanelOperation.Application,PanelApplicationAction.CancelUpdate);
+        });
+        page.Children.Add(PaintSection("软件更新","info",Paint.Stack(14,
+            PT(()=>ResidentUpdate is { } state?$"v{state.CurrentVersion} · 社区版发布源":BuildInfo.UpdateDescription,12,muted:true),
+            Paint.Inline(8,check,install,cancel),PT(()=>PaintUpdateMessage,12,muted:true),
+            PB("发布页",()=>OpenSettings(ReleaseUpdater.ReleasesPage)),
+            PB("打开下载与安装日志",async()=>
+            {
+                if(uiReviewMode)return;
+                if(residentClient==null)OpenLocalFolder(Path.Combine(AppData.DirectoryPath,"updates"));
+                else await RunResidentUpdateActionAsync(PanelApplicationAction.OpenUpdateDirectory);
+            }))));
     }
 }
 

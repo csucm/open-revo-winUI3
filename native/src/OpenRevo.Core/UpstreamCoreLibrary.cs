@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 
 namespace OpenRevo.Core;
@@ -37,8 +36,9 @@ public sealed partial class UpstreamCoreLibrary : IDisposable,ICameraPowerCore,I
     private JsonElement ReadLocked(uint operation, uint mode)
     {
         ObjectDisposedException.ThrowIf(library == 0, this);
-        int size = query(operation, mode, 0, 0);
-        if (size < 1 || size > 1024 * 1024) throw new InvalidOperationException($"Upstream query rejected: {size}.");
+        // The bridge performs the full read even for a size-only request.
+        // Most replies fit here, so avoid sampling the same state twice.
+        int size = 4096;
         for (int attempt = 0; attempt < 3; attempt++)
         {
             nint buffer = Marshal.AllocHGlobal(size);
@@ -48,7 +48,7 @@ public sealed partial class UpstreamCoreLibrary : IDisposable,ICameraPowerCore,I
                 if (actual < 1 || actual > 1024 * 1024) throw new InvalidOperationException($"Upstream query failed: {actual}.");
                 if (actual > size) { size = actual; continue; }
                 byte[] bytes = new byte[actual - 1]; Marshal.Copy(buffer, bytes, 0, bytes.Length);
-                using var document = JsonDocument.Parse(Encoding.UTF8.GetString(bytes));
+                using var document = JsonDocument.Parse(bytes);
                 return document.RootElement.Clone();
             }
             finally { Marshal.FreeHGlobal(buffer); }
@@ -126,6 +126,28 @@ public sealed partial class UpstreamCoreLibrary : IDisposable,ICameraPowerCore,I
             if(write(enabled?1u:0u)!=0)throw new IOException("麦克风设置未确认成功，请检查默认输入设备。");
         }
     }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int MicrophoneToggle();
+
+    internal bool ToggleMicrophone()
+    {
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(library == 0, this);
+            var toggle = Marshal.GetDelegateForFunctionPointer<MicrophoneToggle>(
+                NativeLibrary.GetExport(library, "or_native_microphone_toggle"));
+            return toggle() switch
+            {
+                0 => false,
+                1 => true,
+                -6 => throw new IOException("未找到默认麦克风。"),
+                -7 => throw new IOException("默认麦克风已变化，请重新读取后再试。"),
+                _ => throw new IOException("麦克风状态未确认，请检查默认输入设备。")
+            };
+        }
+    }
+
     public void SetCameraPowered(bool enabled)
     {
         lock(gate)

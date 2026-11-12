@@ -1,4 +1,17 @@
 [InstallDelete]
+#ifdef NativeResident
+; Fixed former managed resident entry files; user data and shared Core/Protocol are retained.
+Type: files; Name: "{app}\OpenRevo.Resident.dll"
+Type: files; Name: "{app}\OpenRevo.Resident.deps.json"
+Type: files; Name: "{app}\OpenRevo.Resident.runtimeconfig.json"
+#endif
+; Retire old app-local WebView2 files and duplicate worker apphost artifacts on upgrade.
+Type: files; Name: "{app}\Microsoft.Web.WebView2.Core.dll"
+Type: files; Name: "{app}\Microsoft.Web.WebView2.Core.Projection.dll"
+Type: files; Name: "{app}\WebView2Loader.dll"
+Type: files; Name: "{app}\OpenRevo.PluginWorker.exe"
+Type: files; Name: "{app}\OpenRevo.PluginWorker.deps.json"
+Type: files; Name: "{app}\OpenRevo.PluginWorker.runtimeconfig.json"
 Type: files; Name: "{app}\clretwrc.dll"
 Type: files; Name: "{app}\clrgc.dll"
 Type: files; Name: "{app}\clrgcexp.dll"

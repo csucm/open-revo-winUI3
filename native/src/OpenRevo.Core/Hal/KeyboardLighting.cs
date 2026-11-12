@@ -5,6 +5,7 @@ public sealed record LightingReceipt(KeyboardLighting Before, KeyboardLighting A
 public sealed partial class HardwareSession
 {
     private LightingReceipt? lastLighting;
+    public bool CanUndoKeyboardLighting => Active && Volatile.Read(ref lastLighting) != null;
     public object? LightingDiagnostics{get;private set;}
     // This firmware clears the backlight bit 4 and trigger bit 5 after consuming
     // the command. They are not persistent state and must not cause false conflicts.

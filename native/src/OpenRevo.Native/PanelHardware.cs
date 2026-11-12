@@ -6,55 +6,39 @@ using OpenRevo.Core.Hal;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
-    private UpstreamCoreLibrary? upstream;
+    private UpstreamCoreLibrary? upstream => hardwareRuntime.Bridge;
     private KeyboardCapability keyboard = KeyboardCapability.Detect(false, false, false);
-    private readonly TemperatureSensors temperatures = new();
+    private TemperatureSensors temperatures => hardwareRuntime.Telemetry.Temperatures;
     private Task<TemperatureReading>? temperatureTask;
+    private Task? gpuTemperatureRelease;
+    private bool gpuTemperatureDemand, acceptGpuTemperatureSample;
     private TemperatureReading temperature = new(null, null);
     private DateTimeOffset lastTemperature;
-    private int requestedGpu;
-    private long gpuSavedAt;
     private bool gpuChanging;
-    private bool gpuReadFresh;
-    private bool UsesDeclaredGpuMux => hardware.CoreDelegated && CoreMachine.Current.Manifest is not (null or "");
-    private GpuBootState? gpuBoot;
-    private GpuRuntimeCapabilities? gpuRuntime;
-    private int GpuRuntimeMode=>gpuBoot?.InitialMode==3?3:gpuRuntime is {HybridIgpuSupported:true,IgpuActive:bool active}?(active?1:2):gpuBoot?.InitialMode??0;
-    private bool GpuRestartPending=>GpuRuntimeMode is >=1 and <=3&&gpuState?.Known==true?gpuState.Mode!=GpuRuntimeMode:gpuBoot?.Pending==true;
+    private bool gpuReadFresh => residentClient!=null?residentSnapshot?.Gpu.Fresh==true:hardwareRuntime.Gpu.Snapshot.Fresh;
+    private bool UsesDeclaredGpuMux => residentClient!=null?residentSnapshot?.Gpu.Declared==true:hardware.CoreDelegated && CoreMachine.Current.Manifest is not (null or "");
+    private GpuBootState? gpuBoot => hardwareRuntime.Gpu.Snapshot.Boot;
+    private GpuRuntimeCapabilities? gpuRuntime => hardwareRuntime.Gpu.Snapshot.Runtime;
+    private int GpuRuntimeMode => residentClient!=null?residentSnapshot?.Gpu.RuntimeMode??0:hardwareRuntime.Gpu.Snapshot.RuntimeMode;
+    private bool GpuRestartPending => residentClient!=null?residentSnapshot?.Gpu.RestartPending==true:hardwareRuntime.Gpu.Snapshot.RestartPending;
     private string gpuModeLabel = "状态待读取";
     private readonly Dictionary<int, Button> gpuButtons = [];
-    private GpuModeState? gpuState;
+    private GpuModeState? gpuState => residentClient==null?hardwareRuntime.Gpu.Snapshot.Firmware:
+        residentSnapshot?.Gpu is { Fresh: true } state?new(state.FirmwareMode,state.FirmwareMode>0,state.Integrated,state.Hybrid,state.Discrete):null;
     private Button? gpuReadButton;
     private async Task LoadPanelHardware()
     {
         lightingReadFresh=false;lightingProbeError=null;
         try
         {
-            upstream ??= new UpstreamCoreLibrary(Path.Combine(AppContext.BaseDirectory, "openrevo_native_bridge.dll"));
+            hardwareRuntime.OpenBridge();
             if(quickState.WinLocked==null)await RefreshWindowsWinLock();
             await ReadKeyboardLightingState();
             if (EcReader.IsAllowed(identity))
             {
-                gpuState=await Task.Run(upstream.ReadGpuMode);
-                gpuReadFresh=gpuState.Known;
-                if(!UsesDeclaredGpuMux&&!gpuState.Known)gpuState=GpuModeCache.Read()??gpuState;
-                if(gpuReadFresh&&!UsesDeclaredGpuMux)
-                {
-                    gpuBoot=GpuBootStateStore.Open(gpuState.Mode,requestedGpu,gpuSavedAt);
-                    if(!uiReviewMode)GpuBootStateStore.Save(gpuBoot);
-                    requestedGpu=GpuRestartPending?gpuState.Mode:0;
-                    if(!GpuRestartPending)gpuSavedAt=0;
-                    await SavePreferences();
-                    var probe=Task.Run(GpuRuntimeCapabilities.Probe);
-                    gpuRuntime=await Task.WhenAny(probe,Task.Delay(5000))==probe?await probe:new(null,null,null,null,"ACPI capability query timed out");
-                    try
-                    {
-                        Directory.CreateDirectory(AppData.DiagnosticsPath);
-                        await File.WriteAllTextAsync(Path.Combine(AppData.DiagnosticsPath,"gpu-runtime-probe.json"),System.Text.Json.JsonSerializer.Serialize(new{at=DateTimeOffset.Now,administratorToken=GpuModeControl.IsAdministrator(),gpuRuntime,gpuBoot,firmware=gpuState}));
-                    }
-                    catch(IOException){}catch(UnauthorizedAccessException){}
-                }
-                gpuModeLabel=gpuReadFresh?OriginalGpuName(gpuState.Mode):"待读取";
+                var result=await hardwareRuntime.Gpu.RefreshAsync(persist:!uiReviewMode);
+                if(result.Error is { } error)actions.Add("显卡读取："+error.Message);
+                gpuModeLabel=gpuReadFresh?OriginalGpuName(gpuState?.Mode??0):"待读取";
             }
             if (GpuRestartPending) gpuModeLabel = "待重启";
         }
@@ -66,46 +50,31 @@ public sealed partial class MainWindow
     private async Task ReadKeyboardLightingState()
     {
         lightingReadFresh=false; lightingProbeError=null;
-        upstream ??= new UpstreamCoreLibrary(Path.Combine(AppContext.BaseDirectory, "openrevo_native_bridge.dll"));
-            var caps = await Task.Run(() => upstream.Read(5));
-            string? modelHint = null;
-            var catalog = await Task.Run(() => upstream.Read(6));
-            foreach (var model in catalog.EnumerateArray())
-                if (model.GetProperty("model_id").GetString()?.Equals(identity.Board,StringComparison.OrdinalIgnoreCase)==true && model.TryGetProperty("keyboard_type",out var hint))
-                    modelHint=hint.GetString();
-            var admission = CoreMachine.Current;
-            bool singleZone = hardware.State is { } state && (state.Support2 & Vault.SingleZoneSupportMask) != 0
-                || admission.Ready && admission.ClassicEc && admission.Rgb;
-            keyboard = KeyboardCapability.Detect(caps.GetProperty("per_key").GetBoolean(), caps.GetProperty("four_zone").GetBoolean(), singleZone, modelHint);
-            if(hardware.CoreDelegated && CoreMachine.Current.MonochromeLevels is { } levels)
+        hardwareRuntime.OpenBridge();
+        var result = await Task.Run(() => hardwareRuntime.Desktop.ReadKeyboardLighting(identity.Board));
+        keyboard = result.Capability;
+        lightingProbeError = result.Error;
+        if (keyboard.Kind == "White")
+        {
+            monochromeLevels = result.MonochromeLevels;
+            if (result.Switches is { } switches)
             {
-                keyboard=KeyboardCapability.Detect(false,false,false,"White");
-                monochromeLevels=levels;
-                extraSwitches=await Task.Run(upstream.ReadOverviewSwitches);
-                UpdateMonochromeReadback(extraSwitches);
+                extraSwitches = switches;
+                UpdateMonochromeReadback(switches);
             }
-            else if(hardware.SupportsDeclaredRgb)
-            {
-                keyboard=new("SingleZone","单区 RGB",true,false);
-                lightingProbeError="可发送 RGB 灯效和颜色命令，当前状态未知。";
-            }
-            DiagnosticLog.Record("lighting.detected",new{kind=keyboard.Kind,caps,modelHint,support2=hardware.State?.Support2,connected=hardware.Active});
-            if (keyboard.Kind == "SingleZone"&&!hardware.SupportsDeclaredRgb)
-            {
-                try
-                {
-                var light = await Task.Run(() => hardware.ProbeLighting());
-                lightingReadFresh=true;
-                rgbLevel = (light.Backlight & 2) != 0 ? 0 : Math.Clamp(light.Backlight >> 5, 0, 4);
-                rgbMode = rgbLevel == 0 ? "关闭背光" : (light.Trigger & Vault.RainbowMask) != 0 ? "彩虹循环" : "静态单色";
-                // Preserve the actual RGB when changing brightness or effects. A
-                // nearest named preset is a label, never a replacement readback.
-                uint Channel(int value)=>(uint)Math.Clamp((int)Math.Round(value*255d/50),0,255);
-                customRgb=Channel(light.Red)<<16|Channel(light.Green)<<8|Channel(light.Blue);
-                rgbColor = colorPresets.MinBy(x => Math.Pow((x.Hex>>16)-light.Red*255d/50,2)+Math.Pow(((x.Hex>>8)&255)-light.Green*255d/50,2)+Math.Pow((x.Hex&255)-light.Blue*255d/50,2)).Name;
-                }
-                catch(Exception error){lightingProbeError=error.Message;DiagnosticLog.Failure("lighting.initial_read",error,new{keyboard.Kind});}
-            }
+        }
+        else if (result.CommandOnly)
+            lightingProbeError = "可发送 RGB 灯效和颜色命令，当前状态未知。";
+        if (result.Confirmed is not { } light) return;
+        lightingReadFresh = true;
+        rgbLevel = (light.Backlight & 2) != 0 ? 0 : Math.Clamp(light.Backlight >> 5, 0, 4);
+        rgbMode = rgbLevel == 0 ? "关闭背光" : (light.Trigger & Vault.RainbowMask) != 0 ? "彩虹循环" : "静态单色";
+        // A nearest named preset is a label. Keep the actual color readback.
+        uint Channel(int value) => (uint)Math.Clamp((int)Math.Round(value * 255d / 50), 0, 255);
+        customRgb = Channel(light.Red) << 16 | Channel(light.Green) << 8 | Channel(light.Blue);
+        rgbColor = colorPresets.MinBy(x => Math.Pow((x.Hex >> 16) - light.Red * 255d / 50, 2)
+            + Math.Pow(((x.Hex >> 8) & 255) - light.Green * 255d / 50, 2)
+            + Math.Pow((x.Hex & 255) - light.Blue * 255d / 50, 2)).Name;
     }
     private FrameworkElement GpuChoices()
     {
@@ -127,63 +96,40 @@ public sealed partial class MainWindow
 
     private async Task RunGpuRequest(int target)
     {
+        if(residentClient!=null){await RunResidentGpuAsync(target);return;}
         if(closed||gpuChanging||(target!=0&&(!hardware.Active||!gpuReadFresh))||upstream==null)return;
-        if(UsesDeclaredGpuMux)
-        {
-            var core = upstream;
-            if(target == 0)
-            {
-                gpuState = await Task.Run(core.ReadGpuMode);
-                gpuReadFresh = gpuState.Known;
-                UpdateGpuControls();
-                return;
-            }
-
-            if(gpuState?.Supports(target) == true)
-                await RunHardware(() => hardware.ApplyDeclaredGpuMux(target, core), "Core 已发送显卡模式命令。请刷新读取状态。");
-            return;
-        }
-        if(target!=0&&gpuState?.Mode==target&&(target==3||GpuRuntimeMode==target||gpuRuntime?.HybridIgpuSupported!=true||gpuBoot?.InitialMode==3))return;
-        await operationQueue.WaitAsync();
-        if(closed){operationQueue.Release();return;}
-        bool runtimeChanged=false;gpuChanging=true;UpdateGpuControls();
+        int expected=gpuState?.Mode??0;
+        gpuChanging=true;UpdateGpuControls();
         try
         {
+            UpdateGpuTemperatureDemand();
             if(ecTask!=null)try{await ecTask;}catch{}
             if(temperatureTask!=null)try{await temperatureTask;}catch{}
-            // Persist the immutable baseline BEFORE staging, including when the
-            // application is later closed and reopened before Windows restarts.
-            if(gpuState?.Known==true)
-            {
-                gpuBoot??=GpuBootStateStore.Open(gpuState.Mode,requestedGpu,gpuSavedAt);
-                GpuBootStateStore.Save(gpuBoot);
-            }
-            var reply=await GpuModeControl.Request(target,gpuState?.Known==true?gpuState.Mode:0);
+            if (gpuTemperatureRelease != null) await gpuTemperatureRelease;
+            var reply=target==0?await hardwareRuntime.Gpu.RefreshAsync():await hardwareRuntime.Gpu.SelectAsync(target,expected);
             if(closed)return;
-            if(reply.Success&&target is 1 or 2&&gpuBoot?.InitialMode is 1 or 2&&gpuRuntime is {HybridIgpuSupported:true,IgpuActive:bool expected})
-            {runtimeChanged=expected!=(target==1);gpuRuntime=await Task.Run(()=>hardware.SwitchHybridRuntime(expected,target==1));}
-            else if(target==0)gpuRuntime=await Task.Run(GpuRuntimeCapabilities.Probe);
-            if(reply.State?.Known==true)
+            if(reply.Outcome==GpuCommandOutcome.CommandSent)
             {
-                gpuReadFresh=true;
-                gpuState=reply.State;
-                gpuBoot=(gpuBoot??GpuBootStateStore.Open(gpuState.Mode,requestedGpu,gpuSavedAt)).Observe(gpuState.Mode);
-                GpuBootStateStore.Save(gpuBoot);
-                requestedGpu=GpuRestartPending?gpuState.Mode:0;
-                gpuSavedAt=GpuRestartPending?DateTimeOffset.UtcNow.ToUnixTimeSeconds():0;
-                await SavePreferences();
+                ShowHardwareSuccess("Core 已发送显卡模式命令。请刷新读取状态。");
+                return;
             }
-            if(!reply.Success){await GpuMessage("显卡设置未完成",reply.Error??"请重新读取显卡设置。");return;}
-            if(reply.Changed||runtimeChanged)
+            if(reply.Error is { } failure)
+            {
+                actions.Add(failure.ToString());
+                if(!exitRequested)await GpuMessage("显卡设置未完成",failure.Message);
+                return;
+            }
+            if(reply.Outcome==GpuCommandOutcome.ReadbackConfirmed)
             {
                 ConfirmedActionOsd(OriginalGpuName(target)+(GpuRestartPending?" · 待重启":" · 已生效，无需重启"),target==1?"gpu-integrated":target==2?"gpu-hybrid":"gpu-discrete");
                 await GpuMessage(GpuRestartPending?"显卡模式已保存":"显卡设置已确认",GpuRestartPending?$"已选择{OriginalGpuName(target)}，重启后生效。准备好后请自行重启电脑。":"已确认当前显卡模式，无需为此次切换重启。");
             }
-            else if(target!=0)await GpuMessage("无需更改",GpuRestartPending?"此模式已经保存，重启后生效。":"固件已设置为此模式。");
+            else if(reply.Outcome==GpuCommandOutcome.NoChange&&!exitRequested)
+                await GpuMessage("无需更改",GpuRestartPending?"此模式已经保存，重启后生效。":"固件已设置为此模式。");
         }
         catch(System.ComponentModel.Win32Exception error) when(error.NativeErrorCode==1223){if(!closed)await GpuMessage("已取消","没有执行显卡操作。");}
-        catch(Exception error){gpuReadFresh=false;gpuRuntime=null;actions.Add(error.ToString());if(!closed)await GpuMessage("显卡结果未确认","请点击显卡模式标题重新读取设置。");}
-        finally{gpuChanging=false;lastEc=DateTimeOffset.MinValue;operationQueue.Release();if(!closed)UpdateGpuControls();}
+        catch(Exception error){actions.Add(error.ToString());if(!closed&&!exitRequested)await GpuMessage("显卡结果未确认","请点击显卡模式标题重新读取设置。");}
+        finally{gpuChanging=false;lastEc=DateTimeOffset.MinValue;if(!closed)UpdateGpuControls();}
     }
     private Task GpuMessage(string title,string message)
     {
@@ -208,16 +154,51 @@ public sealed partial class MainWindow
             SetChoiceVisual(button,value==selected);
         }
     }
+    private void UpdateGpuTemperatureDemand()
+    {
+        // Large overview and tray GPU temperature already come from the Rust snapshot.
+        bool needed = mini && IsVisibleNow() && !trayHidden && !gpuChanging &&
+            !PaintIntegratedOnly && MiniSaved.Top.Contains("gpu") &&
+            latest?.OnAc == true && ec.GpuFan is > 0;
+        if (needed == gpuTemperatureDemand) return;
+        gpuTemperatureDemand = needed;
+        if (needed)
+        {
+            lastTemperature = DateTimeOffset.MinValue;
+            return;
+        }
+
+        temperature = temperature with { Gpu = null };
+        acceptGpuTemperatureSample = false;
+        if (gpuTemperatureRelease is { IsCompleted: false }) return;
+        var pending = temperatureTask;
+        gpuTemperatureRelease = Task.Run(async () =>
+        {
+            // A queued read can still start after demand was removed.
+            if (pending != null)
+            {
+                try { await pending.ConfigureAwait(false); }
+                catch { /* The tick owns the sample result. */ }
+            }
+            try { temperatures.ReleaseGpu(); }
+            catch (Exception error) { DiagnosticLog.Failure("temperature.gpu_release", error); }
+        });
+    }
+
     private void SamplePanelTemperatures()
     {
         if (temperatureTask is { IsCompleted:true })
         {
-            temperature = temperatureTask.IsCompletedSuccessfully ? temperatureTask.Result : new(null,null); temperatureTask = null;
+            var reading = temperatureTask.IsCompletedSuccessfully ? temperatureTask.Result : new(null, null);
+            temperature = acceptGpuTemperatureSample ? reading : reading with { Gpu = null };
+            temperatureTask = null;
         }
-        if (!gpuChanging && temperatureTask == null && DateTimeOffset.Now-lastTemperature >= TimeSpan.FromSeconds(6))
+        if (!gpuChanging && temperatureTask == null && gpuTemperatureRelease is not { IsCompleted: false } &&
+            DateTimeOffset.Now-lastTemperature >= TimeSpan.FromSeconds(6))
         {
             lastTemperature=DateTimeOffset.Now;
-            bool sampleGpu = latest?.OnAc == true && ec.GpuFan is > 0;
+            bool sampleGpu = gpuTemperatureDemand;
+            acceptGpuTemperatureSample = sampleGpu;
             var core=upstream;
             temperatureTask=Task.Run(()=>{
                 var reading=temperatures.Read(sampleGpu);

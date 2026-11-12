@@ -1,0 +1,10 @@
+{
+  "apiMajor": 1,
+  "id": "framework-isolation-probe",
+  "name": "框架隔离验证夹具",
+  "version": "1.0.0",
+  "entryAssembly": "IsolationProbe.dll",
+  "entryType": "OpenRevo.PluginFixtures.IsolationProbe",
+  "permissions": ["ui.view", "config.own", "hardware.performance.set", "hardware.battery.limit.set"],
+  "background": false
+}

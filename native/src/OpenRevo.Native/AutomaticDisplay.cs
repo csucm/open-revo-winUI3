@@ -6,17 +6,15 @@ using OpenRevo.Core;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
-    private readonly AutomaticRefresh automaticRefresh = new();
     private DispatcherQueueTimer? powerTimer;
     private bool lowRefreshOnBattery, powerCheckRunning;
-    private bool? lastPower;
-    private DateTimeOffset lastPolicyCheck;
     private readonly Dictionary<int, Button> refreshButtons = [];
     private Button LowRefreshButton()
     {
         Button button = null!;
         button = Ui.Button("拔电低刷", async (_, _) =>
         {
+            if(residentClient!=null){await ToggleResidentLowRefreshAsync();buttonStyle(lowRefreshOnBattery);return;}
             lowRefreshOnBattery = !lowRefreshOnBattery;
             if (lowRefreshOnBattery) buttonStyle(true); else buttonStyle(false);
             await SavePreferences(); await CheckAutomaticRefresh(true);
@@ -31,25 +29,15 @@ public sealed partial class MainWindow
         ToolTipService.SetToolTip(button, "拔电降至60 Hz省电，接电恢复之前的刷新率");
         return button;
     }
-    private async Task CheckAutomaticRefresh(bool force = false)
+    private async Task CheckAutomaticRefresh(bool force = false, bool refreshAfterWake = false)
     {
         if (closed || !hardware.Active || powerCheckRunning || displayBusy || brightnessApplying || displayTopologyPending || displayTopologyReading) return;
-        if (trayHidden && !lowRefreshOnBattery && !automaticRefresh.NeedsEvaluationWhenDisabled) return;
-        bool? ac = Telemetry.ReadAc();
-        if (!force && ac == lastPower && DateTimeOffset.Now-lastPolicyCheck < TimeSpan.FromSeconds(10)) return;
-        powerCheckRunning = true; lastPower = ac; lastPolicyCheck = DateTimeOffset.Now;
+        powerCheckRunning = true;
         try
         {
-            var previous = displayState;
             int revision=displayTopologyRevision;
-            var sample = await Task.Run(() =>
-            {
-                var current = DisplayControl.Read();
-                if (current.DeviceName != previous?.DeviceName || current.Active != previous?.Active) automaticRefresh.InvalidateTopology();
-                automaticRefresh.Evaluate(lowRefreshOnBattery, ac, () => current, (expected,target) => { DisplayControl.SetRefresh(expected,target); current=DisplayControl.Read(); });
-                return current;
-            });
-            if(closed||revision!=displayTopologyRevision)return;
+            var sample=await hardwareRuntime.Display.EvaluateAutomaticAsync(lowRefreshOnBattery,!trayHidden,force,refreshAfterWake);
+            if(sample==null||closed||revision!=displayTopologyRevision)return;
             displayState=sample;
             UpdateDisplayValues();
         }

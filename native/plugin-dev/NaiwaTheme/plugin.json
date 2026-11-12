@@ -1,0 +1,412 @@
+{
+  "apiMajor": 1,
+  "id": "theme-naiwa",
+  "name": "奶娃主题 · 奶黄",
+  "version": "1.0.0",
+  "entryAssembly": "",
+  "entryType": "",
+  "permissions": [
+    "ui.theme"
+  ],
+  "background": false,
+  "platform": {
+    "schemaVersion": 1,
+    "runtime": "static",
+    "requiredCapabilities": [
+      "ui.theme"
+    ],
+    "optionalCapabilities": [],
+    "contributions": {
+      "pages": [],
+      "theme": [
+        {
+          "surface": "main",
+          "mode": "light",
+          "token": "background",
+          "value": "FFF6D8"
+        },
+        {
+          "surface": "main",
+          "mode": "light",
+          "token": "surface",
+          "value": "FFFCF1"
+        },
+        {
+          "surface": "main",
+          "mode": "light",
+          "token": "border",
+          "value": "D6C58E"
+        },
+        {
+          "surface": "main",
+          "mode": "light",
+          "token": "text",
+          "value": "3F3521"
+        },
+        {
+          "surface": "main",
+          "mode": "light",
+          "token": "muted",
+          "value": "716248"
+        },
+        {
+          "surface": "main",
+          "mode": "light",
+          "token": "accent",
+          "value": "806414"
+        },
+        {
+          "surface": "main",
+          "mode": "light",
+          "token": "tint",
+          "value": "F2DF99"
+        },
+        {
+          "surface": "main",
+          "mode": "light",
+          "token": "subtle",
+          "value": "F6EAC4"
+        },
+        {
+          "surface": "main",
+          "mode": "dark",
+          "token": "background",
+          "value": "282419"
+        },
+        {
+          "surface": "main",
+          "mode": "dark",
+          "token": "surface",
+          "value": "353020"
+        },
+        {
+          "surface": "main",
+          "mode": "dark",
+          "token": "border",
+          "value": "665A37"
+        },
+        {
+          "surface": "main",
+          "mode": "dark",
+          "token": "text",
+          "value": "FFF4CF"
+        },
+        {
+          "surface": "main",
+          "mode": "dark",
+          "token": "muted",
+          "value": "D1C29A"
+        },
+        {
+          "surface": "main",
+          "mode": "dark",
+          "token": "accent",
+          "value": "F3CC59"
+        },
+        {
+          "surface": "main",
+          "mode": "dark",
+          "token": "tint",
+          "value": "514323"
+        },
+        {
+          "surface": "main",
+          "mode": "dark",
+          "token": "subtle",
+          "value": "423923"
+        },
+        {
+          "surface": "mini",
+          "mode": "light",
+          "token": "background",
+          "value": "FFF6D8"
+        },
+        {
+          "surface": "mini",
+          "mode": "light",
+          "token": "surface",
+          "value": "FFFCF1"
+        },
+        {
+          "surface": "mini",
+          "mode": "light",
+          "token": "border",
+          "value": "D6C58E"
+        },
+        {
+          "surface": "mini",
+          "mode": "light",
+          "token": "text",
+          "value": "3F3521"
+        },
+        {
+          "surface": "mini",
+          "mode": "light",
+          "token": "muted",
+          "value": "716248"
+        },
+        {
+          "surface": "mini",
+          "mode": "light",
+          "token": "accent",
+          "value": "806414"
+        },
+        {
+          "surface": "mini",
+          "mode": "light",
+          "token": "tint",
+          "value": "F2DF99"
+        },
+        {
+          "surface": "mini",
+          "mode": "light",
+          "token": "subtle",
+          "value": "F6EAC4"
+        },
+        {
+          "surface": "mini",
+          "mode": "dark",
+          "token": "background",
+          "value": "282419"
+        },
+        {
+          "surface": "mini",
+          "mode": "dark",
+          "token": "surface",
+          "value": "353020"
+        },
+        {
+          "surface": "mini",
+          "mode": "dark",
+          "token": "border",
+          "value": "665A37"
+        },
+        {
+          "surface": "mini",
+          "mode": "dark",
+          "token": "text",
+          "value": "FFF4CF"
+        },
+        {
+          "surface": "mini",
+          "mode": "dark",
+          "token": "muted",
+          "value": "D1C29A"
+        },
+        {
+          "surface": "mini",
+          "mode": "dark",
+          "token": "accent",
+          "value": "F3CC59"
+        },
+        {
+          "surface": "mini",
+          "mode": "dark",
+          "token": "tint",
+          "value": "514323"
+        },
+        {
+          "surface": "mini",
+          "mode": "dark",
+          "token": "subtle",
+          "value": "423923"
+        },
+        {
+          "surface": "menu",
+          "mode": "light",
+          "token": "background",
+          "value": "FFF6D8"
+        },
+        {
+          "surface": "menu",
+          "mode": "light",
+          "token": "surface",
+          "value": "FFFCF1"
+        },
+        {
+          "surface": "menu",
+          "mode": "light",
+          "token": "border",
+          "value": "D6C58E"
+        },
+        {
+          "surface": "menu",
+          "mode": "light",
+          "token": "text",
+          "value": "3F3521"
+        },
+        {
+          "surface": "menu",
+          "mode": "light",
+          "token": "muted",
+          "value": "716248"
+        },
+        {
+          "surface": "menu",
+          "mode": "light",
+          "token": "accent",
+          "value": "806414"
+        },
+        {
+          "surface": "menu",
+          "mode": "light",
+          "token": "tint",
+          "value": "F2DF99"
+        },
+        {
+          "surface": "menu",
+          "mode": "light",
+          "token": "subtle",
+          "value": "F6EAC4"
+        },
+        {
+          "surface": "menu",
+          "mode": "dark",
+          "token": "background",
+          "value": "282419"
+        },
+        {
+          "surface": "menu",
+          "mode": "dark",
+          "token": "surface",
+          "value": "353020"
+        },
+        {
+          "surface": "menu",
+          "mode": "dark",
+          "token": "border",
+          "value": "665A37"
+        },
+        {
+          "surface": "menu",
+          "mode": "dark",
+          "token": "text",
+          "value": "FFF4CF"
+        },
+        {
+          "surface": "menu",
+          "mode": "dark",
+          "token": "muted",
+          "value": "D1C29A"
+        },
+        {
+          "surface": "menu",
+          "mode": "dark",
+          "token": "accent",
+          "value": "F3CC59"
+        },
+        {
+          "surface": "menu",
+          "mode": "dark",
+          "token": "tint",
+          "value": "514323"
+        },
+        {
+          "surface": "menu",
+          "mode": "dark",
+          "token": "subtle",
+          "value": "423923"
+        },
+        {
+          "surface": "dialog",
+          "mode": "light",
+          "token": "background",
+          "value": "FFF6D8"
+        },
+        {
+          "surface": "dialog",
+          "mode": "light",
+          "token": "surface",
+          "value": "FFFCF1"
+        },
+        {
+          "surface": "dialog",
+          "mode": "light",
+          "token": "border",
+          "value": "D6C58E"
+        },
+        {
+          "surface": "dialog",
+          "mode": "light",
+          "token": "text",
+          "value": "3F3521"
+        },
+        {
+          "surface": "dialog",
+          "mode": "light",
+          "token": "muted",
+          "value": "716248"
+        },
+        {
+          "surface": "dialog",
+          "mode": "light",
+          "token": "accent",
+          "value": "806414"
+        },
+        {
+          "surface": "dialog",
+          "mode": "light",
+          "token": "tint",
+          "value": "F2DF99"
+        },
+        {
+          "surface": "dialog",
+          "mode": "light",
+          "token": "subtle",
+          "value": "F6EAC4"
+        },
+        {
+          "surface": "dialog",
+          "mode": "dark",
+          "token": "background",
+          "value": "282419"
+        },
+        {
+          "surface": "dialog",
+          "mode": "dark",
+          "token": "surface",
+          "value": "353020"
+        },
+        {
+          "surface": "dialog",
+          "mode": "dark",
+          "token": "border",
+          "value": "665A37"
+        },
+        {
+          "surface": "dialog",
+          "mode": "dark",
+          "token": "text",
+          "value": "FFF4CF"
+        },
+        {
+          "surface": "dialog",
+          "mode": "dark",
+          "token": "muted",
+          "value": "D1C29A"
+        },
+        {
+          "surface": "dialog",
+          "mode": "dark",
+          "token": "accent",
+          "value": "F3CC59"
+        },
+        {
+          "surface": "dialog",
+          "mode": "dark",
+          "token": "tint",
+          "value": "514323"
+        },
+        {
+          "surface": "dialog",
+          "mode": "dark",
+          "token": "subtle",
+          "value": "423923"
+        }
+      ],
+      "motions": [],
+      "keys": [],
+      "policies": []
+    }
+  }
+}

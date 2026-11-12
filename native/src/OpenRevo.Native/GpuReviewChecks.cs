@@ -19,7 +19,7 @@ public sealed partial class MainWindow
         }
         catch(Exception error){actions.Add(error.ToString());check("Highest privilege logon task validates in Windows: "+error.Message,false);}
         check("Elevated GPU read uses the current process token",(await GpuModeControl.Request(0)).Success);
-        check("Prior 3→2→3 selection no longer shows restart pending",!GpuRestartPending&&requestedGpu==0);
+        check("Prior 3→2→3 selection no longer shows restart pending",!GpuRestartPending&&AppData.Load().RequestedGpu==0);
         try
         {
             foreach(int target in new[]{2,3})
@@ -39,7 +39,7 @@ public sealed partial class MainWindow
             var actual=await Task.Run(upstream.ReadGpuMode);
             if(actual.Known&&actual.Mode!=baseline.Mode)
             {
-                gpuState=actual;await RunGpuRequest(baseline.Mode);
+                await RunGpuRequest(0);await RunGpuRequest(baseline.Mode);
             }
             var final=await Task.Run(upstream.ReadGpuMode);
             check("GPU safe test restored firmware and cleared pending flag",final.Known&&final.Mode==baseline.Mode&&!GpuRestartPending);

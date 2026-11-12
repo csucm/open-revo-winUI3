@@ -139,7 +139,7 @@ public sealed partial class MainWindow
                 {
                     if(generation!=Volatile.Read(ref lightingGeneration)||token.IsCancellationRequested||closed||exitRequested||desktopRuntimeClosed)return new{Skipped=true};
                     attempted=true;
-                    object receipt=hardware.SupportsDeclaredRgb?hardware.ApplyDeclaredRgb(color,level==0?0:rainbow?2:1):hardware.SetKeyboardLighting((byte)(color>>16),(byte)(color>>8),(byte)color,level,rainbow);
+                    var receipt=hardwareRuntime.Desktop.SetKeyboardRgb(color,level,rainbow);
                     applied=true;return receipt;
                 },hardware.SupportsDeclaredRgb?"Core 已发送 RGB 背光命令。":"背光已更新。");
                 if(attempted&&!applied)

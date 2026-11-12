@@ -26,13 +26,14 @@ public sealed class TuningPresetStore
     }
     public void Save(TuningPreset preset,TuningSnapshot state)
     {
-        Shape(preset.Profile);HardwareSession.ValidateTuning(state,preset.Profile);ValidName(preset.Name);
+        Shape(preset.Profile);HardwareSession.ValidateTuningDraft(state,preset.Profile);ValidName(preset.Name);
         string file=FileFor(preset.Id);Directory.CreateDirectory(DirectoryPath);string temporary=Path.Combine(DirectoryPath,Guid.NewGuid().ToString("N")+".tmp");
         File.WriteAllText(temporary,JsonSerializer.Serialize(preset,json));File.Move(temporary,file,true);
     }
     public TuningPreset[] Load(TuningPreset[] builtins,TuningSnapshot state)
     {
         var result=builtins.ToDictionary(p=>p.Id);if(!Directory.Exists(DirectoryPath))return builtins;
+        var available=state with{CpuCeilings=new(byte.MaxValue,byte.MaxValue,byte.MaxValue)};
         foreach(string file in Directory.EnumerateFiles(DirectoryPath,"*.json").Order().Take(100))
         {
             try
@@ -40,8 +41,9 @@ public sealed class TuningPresetStore
                 if(new FileInfo(file).Length>1024*1024)continue;
                 var p=JsonSerializer.Deserialize<TuningPreset>(File.ReadAllText(file),json);if(p==null)continue;
                 if(Path.GetFileName(file)!=Path.GetFileName(FileFor(p.Id)))continue;
-                Shape(p.Profile);HardwareSession.ValidateTuning(state,p.Profile);ValidName(p.Name);
-                bool builtin=BuiltinIds.Contains(p.Id);if(builtin)p=p with{Name=builtins.Single(b=>b.Id==p.Id).Name,Icon=builtins.Single(b=>b.Id==p.Id).Icon,BuiltIn=true};else p=p with{BuiltIn=false};
+                Shape(p.Profile);HardwareSession.ValidateTuningDraft(available,p.Profile);
+                p=p with{Name=ValidName(p.Name)};
+                bool builtin=BuiltinIds.Contains(p.Id);if(builtin)p=p with{Icon=builtins.Single(b=>b.Id==p.Id).Icon,BuiltIn=true};else p=p with{BuiltIn=false};
                 result[p.Id]=p with{Profile=p.Profile.Copy(),Adjustments=p.Adjustments??[]};
             }
             catch(Exception error) when(error is IOException or JsonException or ArgumentException or UnauthorizedAccessException){}
@@ -58,11 +60,23 @@ public sealed class TuningPresetStore
             if(preset.Id!=id)throw new IOException("方案标识不一致。");
         }
         else preset=builtins.FirstOrDefault(p=>p.Id==id)??throw new IOException("已保存方案不存在。");
-        Shape(preset.Profile);HardwareSession.ValidateTuning(state,preset.Profile);ValidName(preset.Name);
+        Shape(preset.Profile);HardwareSession.ValidateTuningDraft(state,preset.Profile);ValidName(preset.Name);
         return preset with{Profile=preset.Profile.Copy()};
     }
     public TuningPreset Duplicate(TuningPreset source,string name,TuningSnapshot state)
     {var p=source with{Id="user_"+Guid.NewGuid().ToString("N"),Name=ValidName(name),BuiltIn=false,Profile=source.Profile.Copy()};Save(p,state);return p;}
+    public static TuningPreset CreateManualSource(TuningPreset balanced,TuningSnapshot state)
+    {
+        bool gpuSupported=state.Gpu.Capabilities.Supported;
+        var profile=balanced.Profile with
+        {
+            TemperatureEnabled=state.CpuTuning,
+            GpuSuperPerformance=false,
+            GpuBoostEnabled=gpuSupported,
+            Offsets=gpuSupported&&state.Gpu.Offsets!=null?new ClockOffsets(0,0):state.Gpu.Offsets
+        };
+        return balanced with{Icon="star",Profile=state.FitCpuDraft(profile)};
+    }
     public void Delete(TuningPreset preset)
     {
         if(preset.BuiltIn||BuiltinIds.Contains(preset.Id))throw new InvalidOperationException("内置方案不可删除。");
@@ -87,7 +101,7 @@ public sealed class TuningPresetStore
         var defaultDraft=state.CreateDraft();
         if(c.Supported&&!c.ConfigurableBase)notes.Add("本机GPU基础功耗固定为"+c.BaseMaxWatts+"W");
         int pl1=Int("cpu_pl1_watts",defaultDraft.Pl1),pl2=Int("cpu_pl2_watts",defaultDraft.Pl2),pl4=Int("cpu_pl4_watts",defaultDraft.Pl4);
-        if(builtin)
+        if(builtin&&state.CpuTuning)
         {
             (pl1,pl2,pl4)=id switch{
                 "preset_balance"=>(r.BalancePl1,r.BalancePl2,r.BalancePl4),"preset_quiet"=>(r.OfficePl1,r.OfficePl2,r.OfficePl4),"preset_extreme"=>(r.TurboPl1,r.TurboPl2,r.TurboPl4),
@@ -95,7 +109,15 @@ public sealed class TuningPresetStore
             notes.Add("CPU参数按本机原厂功耗重新计算");
         }
         int Limit(int value,int min,int max,string label){int n=Math.Clamp(value,min,max);if(n!=value)notes.Add($"{label}：{value} → {n}");return n;}
-        pl2=Limit(pl2,15,Math.Min(state.Pl2Max,state.Pl4Max-20),"PL2");pl1=Limit(pl1,15,Math.Min(state.Pl1Max,pl2),"PL1");pl4=Limit(pl4,pl2+20,state.Pl4Max,"PL4");
+        if(state.CpuTuning)
+        {
+            var cpuLimits=state.AdaptCpuLimits(pl1,pl2,pl4);
+            if(cpuLimits.Pl1!=pl1)notes.Add($"PL1：{pl1} → {cpuLimits.Pl1}");
+            if(cpuLimits.Pl2!=pl2)notes.Add($"PL2：{pl2} → {cpuLimits.Pl2}");
+            if(cpuLimits.Pl4!=pl4)notes.Add($"PL4：{pl4} → {cpuLimits.Pl4}");
+            (pl1,pl2,pl4)=cpuLimits;
+        }
+        else notes.Add("本机未开放 CPU 功耗和温控调校，应用时保留原值");
         FanPoint[] Adapt(FanPoint[] curve,string label)
         {
             if(curve.Length!=8)throw new ArgumentException("原版方案每条曲线必须有8个节点。");
@@ -118,12 +140,12 @@ public sealed class TuningPresetStore
         TuningPreset p;
         if(root.TryGetProperty("native_profile",out var native))
         {
-            var profile=native.Deserialize<TuningProfile>(json)??throw new ArgumentException("方案参数为空。");Shape(profile);HardwareSession.ValidateTuning(state,profile);
+            var profile=native.Deserialize<TuningProfile>(json)??throw new ArgumentException("方案参数为空。");Shape(profile);HardwareSession.ValidateTuningDraft(state,profile);
             p=new("user_"+Guid.NewGuid().ToString("N"),ValidName(root.GetProperty("name").GetString()??"导入方案"),"star",false,profile,[]);
         }
         else if(root.TryGetProperty("Pl1",out _))
         {
-            var profile=root.Deserialize<TuningProfile>(json)!;Shape(profile);HardwareSession.ValidateTuning(state,profile);p=new("user_"+Guid.NewGuid().ToString("N"),"本机草稿","star",false,profile,[]);
+            var profile=root.Deserialize<TuningProfile>(json)!;Shape(profile);HardwareSession.ValidateTuningDraft(state,profile);p=new("user_"+Guid.NewGuid().ToString("N"),"本机草稿","star",false,profile,[]);
         }
         else p=FromOriginal(root,state,false);
         Save(p,state);return p;

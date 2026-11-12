@@ -12,7 +12,11 @@ public sealed partial class MainWindow
         bool pane=navigation.IsPaneOpen;var samples=new List<object>();
         async Task Measure(string name)
         {
-            if(upstream!=null){overviewTelemetry=await Task.Run(()=>upstream.ReadOverviewTelemetry(latest?.OnAc==true&&ec.GpuFan is >0));overviewTelemetryAt=DateTimeOffset.Now;UpdateOverviewValues();}
+            if(upstream is { } core)
+            {
+                await overviewSampling.ReadForReviewAsync(core, latest?.OnAc==true&&ec.GpuFan is >0);
+                UpdateOverviewValues();
+            }
             await Task.Delay(300);root.UpdateLayout();await Task.Delay(80);root.UpdateLayout();
             var origin=page.TransformToVisual(scroll).TransformPoint(new Point(0,0));
             double expected=(scroll.ActualWidth-page.ActualWidth*desktopSurface.ContentScale)/2;

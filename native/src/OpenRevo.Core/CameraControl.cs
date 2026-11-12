@@ -94,7 +94,9 @@ public static class CameraControl
     {
         string? blocked=HardwareSession.CheckEnvironment();if(blocked!=null)throw new InvalidOperationException(blocked);
         if(Read()==null)throw new IOException("未识别到已适配的笔记本摄像头。");
-        var start=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=true,Verb="runas",WindowStyle=ProcessWindowStyle.Hidden};
+        bool elevated = Hal.GpuModeControl.IsAdministrator();
+        var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = !elevated, WindowStyle = ProcessWindowStyle.Hidden };
+        if (!elevated) start.Verb = "runas";
         start.ArgumentList.Add("--camera-helper");start.ArgumentList.Add(enabled?"1":"0");
         using var process=Process.Start(start)??throw new IOException("相机设置未启动。");
         await process.WaitForExitAsync();
@@ -107,25 +109,8 @@ public static class CameraControl
         {
             if(!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))return 12;
             var session=HardwareSession.ForThisMachine();session.Takeover();
-            var baseline=Read()??throw new IOException("本机摄像头不匹配。");
             using var core=new UpstreamCoreLibrary(Path.Combine(AppContext.BaseDirectory,"openrevo_native_bridge.dll"));
-            if(enabled)session.SetCameraPoweredViaCore(core,true);
-            // Privacy recovery must not depend on enabling an already-started
-            // device. Only a real PnP transition invokes the device utility.
-            if(NeedsDeviceTransition(baseline.Enabled,enabled))
-            {
-                var start=new ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"pnputil.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-                start.ArgumentList.Add(enabled?"/enable-device":"/disable-device");start.ArgumentList.Add(baseline.InstanceId);
-                using var process=Process.Start(start)??throw new IOException("设备设置未启动。");
-                var output=process.StandardOutput.ReadToEndAsync();var error=process.StandardError.ReadToEndAsync();
-                process.WaitForExit();Task.WaitAll(output,error);
-                // No /reboot: retain the exact failure for local diagnostics.
-                if(process.ExitCode!=0)throw new IOException($"相机设备设置失败（{process.ExitCode}）。{output.Result} {error.Result}");
-            }
-            for(int i=0;i<40&&Read()?.Enabled!=enabled;i++)Thread.Sleep(100);
-            if(Read()?.Enabled!=enabled)throw new IOException("相机设备状态未确认。");
-            if(enabled)core.AllowCameraAccess();
-            else session.SetCameraPoweredViaCore(core,false);
+            ApplyLegacyState(session,core,enabled);
             return 0;
         }
         catch(Exception e)
@@ -133,6 +118,27 @@ public static class CameraControl
             try{Directory.CreateDirectory(AppData.DiagnosticsPath);File.WriteAllText(Path.Combine(AppData.DiagnosticsPath,"camera-error.txt"),e.ToString());}catch{}
             return 11;
         }
+    }
+    internal static void ApplyLegacyState(HardwareSession session,UpstreamCoreLibrary core,bool enabled)
+    {
+        var baseline=Read()??throw new IOException("本机摄像头不匹配。");
+        if(enabled)session.SetCameraPoweredViaCore(core,true);
+        // Privacy recovery must not depend on enabling an already-started device.
+        if(NeedsDeviceTransition(baseline.Enabled,enabled))
+        {
+            var start=new ProcessStartInfo(Path.Combine(Environment.SystemDirectory,"pnputil.exe"))
+            {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+            start.ArgumentList.Add(enabled?"/enable-device":"/disable-device");
+            start.ArgumentList.Add(baseline.InstanceId);
+            using var process=Process.Start(start)??throw new IOException("设备设置未启动。");
+            var output=process.StandardOutput.ReadToEndAsync();var error=process.StandardError.ReadToEndAsync();
+            process.WaitForExit();Task.WaitAll(output,error);
+            if(process.ExitCode!=0)throw new IOException($"相机设备设置失败（{process.ExitCode}）。{output.Result} {error.Result}");
+        }
+        for(int i=0;i<40&&Read()?.Enabled!=enabled;i++)Thread.Sleep(100);
+        if(Read()?.Enabled!=enabled)throw new IOException("相机设备状态未确认。");
+        if(enabled)core.AllowCameraAccess();
+        else session.SetCameraPoweredViaCore(core,false);
     }
     public static int PreparePrivileged()
     {

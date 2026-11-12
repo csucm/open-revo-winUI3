@@ -16,52 +16,74 @@ internal sealed record WindowsGpuAdapter(
 
 internal sealed partial class WindowsGpuIdentity : IDisposable
 {
-    private nint factory;
+    private nint factory, dxgiLibrary, dxcoreLibrary;
     internal bool IsCurrent => factory != 0 && Method<FactoryCurrent>(factory, 13)(factory);
     internal int EnumerationStatus { get; private set; }
 
     internal WindowsGpuAdapter[] Enumerate()
     {
         Dispose();
-        Guid dxgiId = new("770aae78-f26f-4dba-a829-253c83d1b387");
-        EnumerationStatus = CreateDXGIFactory1(in dxgiId, out factory);
-        if (EnumerationStatus < 0) return [];
-
-        nint dxcore = 0;
         try
         {
-            Guid coreId = new("78ee5945-c36e-4b13-a669-005dd11c0f06");
-            try { _ = DXCoreCreateAdapterFactory(in coreId, out dxcore); }
-            catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { }
-
-            var enumerate = Method<EnumerateAdapter>(factory, 12);
-            var adapters = new Dictionary<string, WindowsGpuAdapter>(StringComparer.OrdinalIgnoreCase);
-            for (uint index = 0; index < 32; index++)
+            dxgiLibrary = NativeLibrary.Load(Path.Combine(Environment.SystemDirectory, "dxgi.dll"));
+            var create = Marshal.GetDelegateForFunctionPointer<CreateFactory>(
+                NativeLibrary.GetExport(dxgiLibrary, "CreateDXGIFactory1"));
+            Guid dxgiId = new("770aae78-f26f-4dba-a829-253c83d1b387");
+            EnumerationStatus = create(in dxgiId, out factory);
+            if (EnumerationStatus < 0 || factory == 0)
             {
-                int status = enumerate(factory, index, out nint adapter);
-                if (status == unchecked((int)0x887A0002)) return [.. adapters.Values]; // DXGI_ERROR_NOT_FOUND
-                if (status < 0 || adapter == 0)
+                Dispose();
+                return [];
+            }
+
+            nint dxcore = 0;
+            try
+            {
+                if (NativeLibrary.TryLoad(Path.Combine(Environment.SystemDirectory, "dxcore.dll"), out dxcoreLibrary) &&
+                    NativeLibrary.TryGetExport(dxcoreLibrary, "DXCoreCreateAdapterFactory", out nint createCore))
                 {
-                    EnumerationStatus = status;
+                    Guid coreId = new("78ee5945-c36e-4b13-a669-005dd11c0f06");
+                    _ = Marshal.GetDelegateForFunctionPointer<CreateFactory>(createCore)(in coreId, out dxcore);
+                }
+                return EnumerateAdapters(dxcore);
+            }
+            finally { if (dxcore != 0) Marshal.Release(dxcore); }
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
+    }
+
+    private WindowsGpuAdapter[] EnumerateAdapters(nint dxcore)
+    {
+        var enumerate = Method<EnumerateAdapter>(factory, 12);
+        var adapters = new Dictionary<string, WindowsGpuAdapter>(StringComparer.OrdinalIgnoreCase);
+        for (uint index = 0; index < 32; index++)
+        {
+            int status = enumerate(factory, index, out nint adapter);
+            if (status == unchecked((int)0x887A0002)) return [.. adapters.Values]; // DXGI_ERROR_NOT_FOUND
+            if (status < 0 || adapter == 0)
+            {
+                EnumerationStatus = status;
+                return [];
+            }
+            try
+            {
+                int descriptionStatus = Method<Describe>(adapter, 10)(adapter, out var desc);
+                if (descriptionStatus < 0)
+                {
+                    EnumerationStatus = descriptionStatus;
                     return [];
                 }
-                try
-                {
-                    int descriptionStatus = Method<Describe>(adapter, 10)(adapter, out var desc);
-                    if (descriptionStatus < 0)
-                    {
-                        EnumerationStatus = descriptionStatus;
-                        return [];
-                    }
-                    var candidate = Identify(desc, dxcore);
-                    adapters.TryAdd(candidate.Luid, candidate);
-                }
-                finally { Marshal.Release(adapter); }
+                var candidate = Identify(desc, dxcore);
+                adapters.TryAdd(candidate.Luid, candidate);
             }
-            EnumerationStatus = unchecked((int)0x8007007A); // Enumeration exceeded the bound.
-            return [];
+            finally { Marshal.Release(adapter); }
         }
-        finally { if (dxcore != 0) Marshal.Release(dxcore); }
+        EnumerationStatus = unchecked((int)0x8007007A); // Enumeration exceeded the bound.
+        return [];
     }
 
     private static WindowsGpuAdapter Identify(Description desc, nint dxcore)
@@ -142,9 +164,23 @@ internal sealed partial class WindowsGpuIdentity : IDisposable
 
     public void Dispose()
     {
-        if (factory == 0) return;
-        Marshal.Release(factory);
-        factory = 0;
+        // The COM factory can still execute code in these libraries until its
+        // reference is released. Drop our module references afterwards.
+        if (factory != 0)
+        {
+            Marshal.Release(factory);
+            factory = 0;
+        }
+        if (dxgiLibrary != 0)
+        {
+            NativeLibrary.Free(dxgiLibrary);
+            dxgiLibrary = 0;
+        }
+        if (dxcoreLibrary != 0)
+        {
+            NativeLibrary.Free(dxcoreLibrary);
+            dxcoreLibrary = 0;
+        }
     }
 
     private static T Method<T>(nint pointer, int slot) where T : Delegate =>
@@ -185,10 +221,8 @@ internal sealed partial class WindowsGpuIdentity : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int GetProperty(nint self, uint property, nuint size, out byte value);
 
-    [DllImport("dxgi.dll", ExactSpelling = true)]
-    private static extern int CreateDXGIFactory1(in Guid iid, out nint factory);
-    [DllImport("dxcore.dll", ExactSpelling = true)]
-    private static extern int DXCoreCreateAdapterFactory(in Guid iid, out nint factory);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int CreateFactory(in Guid iid, out nint factory);
     [DllImport("gdi32.dll", ExactSpelling = true)]
     private static extern int D3DKMTOpenAdapterFromLuid(ref OpenAdapter open);
     [DllImport("gdi32.dll", ExactSpelling = true)]

@@ -1,5 +1,9 @@
 # 公开版本与仓库维护记录
 
+## 0.7.0 · 2026-11-12
+
+重构常驻内核，降低藏盘后的内存占用。修复部分机型重启后性能档位丢失，改善亮度、键盘灯光和传感器读数。见 [0.7.0 更新日志](docs/releases/0.7.0.md)及 [GitHub 发布页](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.7.0)。
+
 ## 仓库整理 · 2026-11-07
 
 原 Tauri/Web 工程、网页插件示例及旧构建流程保存在 `archive-tauri-web-20261107`，主分支聚焦 `native/`。补充 Native 构建和维护入口。当前 Native 文件、已发布 0.6.9 安装包及对应源码附件未变，不构成新软件版本。

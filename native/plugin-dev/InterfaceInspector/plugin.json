@@ -1,0 +1,13 @@
+{
+  "apiMajor": 1,
+  "minimumApiMinor": 2,
+  "id": "sample-interface-inspector",
+  "name": "插件接口检查器",
+  "version": "1.0.0",
+  "entryAssembly": "InterfaceInspector.dll",
+  "entryType": "OpenRevo.SamplePlugins.InterfaceInspector",
+  "permissions": ["ui.view", "state.summary.read"],
+  "background": false,
+  "description": "查看宿主能力清单、主题格式和已有系统摘要，不控制硬件。",
+  "author": "Open-Revo 示例"
+}

@@ -53,22 +53,14 @@ public sealed partial class MainWindow
         using var trace=DiagnosticLog.Begin("display.topology_refresh",new{revision});
         try
         {
-            var sample=await Task.Run(()=>
-            {
-                DisplayState? state=null;int? brightness=null;
-                try{state=DisplayControl.Read();}
-                catch(Exception error){DiagnosticLog.Failure("display.read",error,new{reason="display-switch",revision,topology=DisplayTopology.LastSnapshot},true);}
-                try{brightness=ScreenBrightness.Read();}
-                catch(Exception error){DiagnosticLog.Failure("brightness.read",error,new{reason="display-switch",revision},true);}
-                return(state,brightness);
-            });
+            var sample=await hardwareRuntime.Display.ReadAsync();
             if(closed||exitRequested){trace.Complete(outcome:"closed");return;}
             if(revision!=displayTopologyRevision){trace.Complete(outcome:"superseded");return;}
-            displayState=sample.state;screenBrightness=sample.brightness;
+            displayState=sample.Panel;screenBrightness=sample.Brightness;
             // Preserve the existing low-refresh restore cache on same-panel mode changes.
             if(displayState is {} current&&displayBeforeTopologyRead is {} previous
                 &&(current.DeviceName!=previous.DeviceName||current.Active!=previous.Active))
-                automaticRefresh.InvalidateTopology();
+                hardwareRuntime.Display.InvalidateTopology();
             DiagnosticLog.Record("brightness.state",new{value=screenBrightness,reason="display-switch",revision});
             trace.Complete(new{display=displayState,brightness=screenBrightness},outcome:screenBrightness.HasValue?"success":"unavailable");
             UpdateDisplayValues();RefreshPaintedState();

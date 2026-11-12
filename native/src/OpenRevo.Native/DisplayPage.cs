@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenRevo.Core;
+using OpenRevo.ResidentProtocol;
 
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
@@ -10,38 +11,52 @@ public sealed partial class MainWindow
     private bool displayBusy;
     private async Task ReadDisplay()
     {
-        try { displayState = await Task.Run(DisplayControl.Read);DiagnosticLog.Record("display.state",displayState); } catch(Exception error) { displayState = null;DiagnosticLog.Failure("display.read",error,new{topology=DisplayTopology.LastSnapshot},true); }
-        try { screenBrightness = await Task.Run(ScreenBrightness.Read);DiagnosticLog.Record("brightness.state",new{value=screenBrightness}); } catch(Exception error) { screenBrightness = null;DiagnosticLog.Failure("brightness.read",error,throttle:true); }
+        if(residentClient!=null){await SendResidentAsync(PanelOperation.ReadDisplay,backgroundRead:true);return;}
+        try
+        {
+            var sample=await hardwareRuntime.Display.ReadAsync();
+            if(closed)return;
+            displayState=sample.Panel;screenBrightness=sample.Brightness;
+            DiagnosticLog.Record("display.state",displayState);
+            DiagnosticLog.Record("brightness.state",new{value=screenBrightness});
+        }
+        catch(Exception error)
+        {
+            displayState=null;screenBrightness=null;
+            DiagnosticLog.Failure("display.read",error,new{topology=DisplayTopology.LastSnapshot},true);
+        }
     }
     private async Task ChangeRefresh(int target)
     {
-        if (dialogOpen || displayBusy || brightnessApplying || displayState?.Active != true || displayState.Hertz == target) return;
+        if (dialogOpen || displayBusy || brightnessApplying || displayState is not { Active: true } expected || expected.Hertz == target) return;
+        if(residentClient!=null){await ChangeResidentRefreshAsync(expected.Hertz,target);return;}
         displayBusy = true;
         UpdateDisplayValues();
-        int original = displayState.Hertz; bool keep = false, changed = false;
+        bool keep = false;
+        RefreshTrial? trial = null;
         try
         {
-            await Task.Run(() => DisplayControl.SetRefresh(original, target)); changed = true;
-            if(UsePaintedUi)keep=await PaintDialog($"保留 {target} Hz？",Paint.Text("15 秒内确认，否则自动恢复原刷新率。"),"保留","恢复",15000);
-            else
-            {
-            var dialog = new ContentDialog { XamlRoot = root.XamlRoot, Title = $"保留 {target} Hz？", Content = Ui.Text("15 秒内确认，否则自动恢复原刷新率。"), PrimaryButtonText = "保留", CloseButtonText = "恢复", DefaultButton = ContentDialogButton.Close };
-            dialogOpen = true;
-            var shown = dialog.ShowAsync().AsTask();
-            if (await Task.WhenAny(shown, Task.Delay(15000)) != shown) dialog.Hide();
-            keep = await shown == ContentDialogResult.Primary;
-            }
+            trial=await hardwareRuntime.Display.BeginRefreshTrialAsync(expected,target);
+            int remaining=Math.Clamp((int)(trial.Deadline-DateTimeOffset.UtcNow).TotalMilliseconds,1,15000);
+            if(!closed)keep=await PaintDialog($"保留 {target} Hz？",Paint.Text("15 秒内确认，否则自动恢复原刷新率。"),"保留","恢复",remaining);
         }
-        catch (Exception e) { DiagnosticLog.Failure("display.refresh",e,new{original,target});actions.Add("刷新率操作：" + e.Message); }
+        catch (Exception e) { DiagnosticLog.Failure("display.refresh",e,new{original=expected.Hertz,target});actions.Add("刷新率操作：" + e.Message); }
         finally
         {
             dialogOpen = false;
-            if (changed && !keep)
+            try
             {
-                try { await Task.Run(() => DisplayControl.SetRefresh(target, original)); }
-                catch (Exception e) { await ShowMessage("刷新率恢复未确认", e.Message); }
+                var result=trial==null?null:await hardwareRuntime.Display.FinishRefreshTrialAsync(trial.Id,keep);
+                if(!closed)
+                {
+                    if(result?.Error is { } error&&!exitRequested)
+                        await ShowMessage(result.Kept?"刷新率保留未确认":"刷新率恢复未确认",error.Message);
+                    await ReadDisplay();
+                    if(result?.ConfirmedHertz is int confirmed&&displayState?.Hertz==confirmed)
+                        ConfirmedActionOsd((result.Kept?"屏幕刷新率 · ":"已恢复刷新率 · ")+confirmed+" Hz","refresh");
+                }
             }
-            await ReadDisplay(); displayBusy = false; if (!closed) UpdateDisplayValues();if(changed&&displayState?.Hertz==(keep?target:original))ConfirmedActionOsd((keep?"屏幕刷新率 · ":"已恢复刷新率 · ")+displayState.Hertz+" Hz","refresh");
+            finally{displayBusy=false;if(!closed)UpdateDisplayValues();}
         }
     }
 }

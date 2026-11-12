@@ -41,12 +41,22 @@ public sealed partial class HardwareSession
         using var ec=open();
         if(ec.Read(Vault.ProjectId) is not byte project||!MatchesProject(project))throw new IOException("EC项目不匹配，未读取原厂目标。");
         byte? custom=ec.Read(Vault.CustomMode),clamp=ec.Read(Vault.FanClamp),index=ec.Read(Vault.ModeIndex);
-        int mode=custom is 64 or 65&&clamp.HasValue&&index.HasValue?(custom.Value&1)!=0?4:(clamp.Value&Vault.ModeClampMask)==160?1:(index.Value&Vault.ModeIndexMask)==16?3:2:0;
+        bool oem = custom == 0 && CanReadGm7tg0mFactoryMode;
+        byte? platform = oem ? ec.Read(Vault.PlatformId) : null;
+        byte? isolated = oem ? ec.Read(Vault.FanIsolated) : null;
+        int mode = oem
+            ? Gm7tg0mFactoryMode.Decode(project, platform, custom, clamp, index, isolated) ?? 0
+            : custom is 64 or 65 && clamp.HasValue && index.HasValue
+                ? PerformanceSnapshot.DecodeClassicMode(custom.Value, clamp.Value, index.Value)
+                : 0;
         var gpu=GpuTuningCapabilities.Probe();
         var result=OverviewPowerTargets.Calculate(mode,ec.Read(Vault.OfficePl1),ec.Read(Vault.BalancePl1),ec.Read(Vault.TurboPl1),ec.Read(Vault.CustomPl1),gpu,
             ec.Read(Vault.GpuTgpOffset),ec.Read(Vault.GpuDbControl),ec.Read(Vault.GpuDbWatts),
             "PL1：本机EC原厂寄存器；TGP：按固定Core算法从NVML默认/最高功耗边界计算。自定义值来自当前EC，不使用编辑草稿。");
         if(custom!=ec.Read(Vault.CustomMode)||clamp!=ec.Read(Vault.FanClamp)||index!=ec.Read(Vault.ModeIndex))throw new IOException("读取期间性能模式改变，等待重新读取。");
+        if (oem && (project != ec.Read(Vault.ProjectId) || platform != ec.Read(Vault.PlatformId) ||
+            isolated != ec.Read(Vault.FanIsolated)))
+            throw new IOException("读取期间原厂档位或平台改变，等待重新读取。");
         return result with{Detail=result.Detail+(!result.Pl1Watts.HasValue?" CPU目标尚未读出。":"")+(!result.TgpWatts.HasValue?" GPU功耗边界或当前设定尚未读出。":"")};
     });
 }

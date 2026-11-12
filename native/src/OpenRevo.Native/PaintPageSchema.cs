@@ -66,10 +66,6 @@ internal static class PaintPageSchema
                 new("plugins-1-1","页面跳转与配置保存","独立配置；失败保留旧文件。","status",""),
                 new("plugins-1-2","硬件控制","暂未向扩展开放。","status",""),
             ]),
-            new("网页插件兼容","display",1,false,[
-                new("plugins-2-0","旧网页插件","HTML / CSS / JavaScript 插件当前不能直接运行。","status",""),
-                new("plugins-2-1","插件市场","不展示安装入口或假列表。","status",""),
-            ]),
         ],
         ["settings"]=[
             new("外观与面板","settings",1,false,[
@@ -85,6 +81,7 @@ internal static class PaintPageSchema
                 new("settings-1-1","硬件接管","开启时核验设备；关闭后停止控制。","toggle",""),
                 new("settings-1-2","刷新间隔","隐藏面板后暂停界面采样。","select",""),
                 new("settings-1-3","解除离电限制","电池 / Type-C 下允许高性能档位。","toggle",""),
+                new("settings-1-4","托盘实时数据","开启后，悬停托盘图标时读取 CPU、GPU 温度和占用率。","toggle",""),
             ]),
             new("Windows 基础电源方案","power",1,false,[
                 new("settings-2-0","当前方案","列表以系统实际枚举为准。","select",""),
@@ -177,16 +174,16 @@ internal static class PaintPageSchema
                 new("tuning-1-0","持续功耗 PL1","","range","W"),
                 new("tuning-1-1","短时功耗 PL2","","range","W"),
                 new("tuning-1-2","瞬时功耗 PL4","","range","W"),
-                new("tuning-1-3","自定义温度墙","关闭时保留设置值。","toggle",""),
+                new("tuning-1-3","自定义温度墙","关闭时仍可编辑设定值，应用时使用工厂温控。","toggle",""),
                 new("tuning-1-4","温度墙","","range","°C"),
             ]),
             new("GPU 参数","gpu",1,false,[
                 new("tuning-2-0","超级性能","使用硬件最高功耗额度。","toggle",""),
-                new("tuning-2-1","基础功耗","","range","W"),
-                new("tuning-2-2","动态增强","未读到能力时保留原参数。","toggle",""),
+                new("tuning-2-1","基础功耗","显卡提供可调范围时可编辑。超级性能开启时使用硬件上限。","range","W"),
+                new("tuning-2-2","动态增强","关闭超级性能后，应用时使用这里的开关和上限。","toggle",""),
                 new("tuning-2-3","动态增强上限","","range","W"),
-                new("tuning-2-4","核心频率偏移","","range","MHz"),
-                new("tuning-2-5","显存频率偏移","","range","MHz"),
+                new("tuning-2-4","核心频率偏移","开启超级性能时生效。","range","MHz"),
+                new("tuning-2-5","显存频率偏移","开启超级性能时生效。","range","MHz"),
             ]),
             new("风扇曲线与响应","fan",2,false,[
                 new("tuning-3-0","自定义风扇曲线","关闭后使用工厂狂暴风扇表。","toggle",""),

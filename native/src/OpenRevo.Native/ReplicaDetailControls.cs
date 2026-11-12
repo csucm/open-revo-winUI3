@@ -29,7 +29,7 @@ public sealed partial class MainWindow
             // Tabs remain navigable even when the hardware editor is unavailable.
             lightingZoneTabs[key]=button;SetChoiceVisual(button,selectedLightingZone==key);tabs.Children.Add(button);
         }
-        var undo=MiniControl("撤销灯光更改",()=>hardware.UndoKeyboardLighting(),"恢复上一次灯光设置");undo.FontSize=12;
+        var undo=MiniControl("撤销灯光更改",()=>hardwareRuntime.Desktop.UndoKeyboardLighting(),"恢复上一次灯光设置");undo.FontSize=12;
         var toolbar=DesktopAlignedRow(Ui.Text(keyboard.Description,12,muted:true),undo);toolbar.Margin=new Thickness(0,0,0,14);
         return SuiteVisuals.Stack(14,tabs,toolbar);
     }

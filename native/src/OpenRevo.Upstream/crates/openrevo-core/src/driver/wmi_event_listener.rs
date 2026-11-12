@@ -7,8 +7,8 @@ use windows::Win32::System::Com::{
     COINIT_MULTITHREADED, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE,
 };
 use windows::Win32::System::Wmi::{
-    IEnumWbemClassObject, IWbemClassObject, IWbemLocator, WbemLocator, WBEM_FLAG_FORWARD_ONLY,
-    WBEM_FLAG_RETURN_IMMEDIATELY, WBEM_GENERIC_FLAG_TYPE,
+    IEnumWbemClassObject, IWbemClassObject, IWbemLocator, IWbemServices, WbemLocator, WBEM_E_FAILED,
+    WBEM_FLAG_FORWARD_ONLY, WBEM_FLAG_RETURN_IMMEDIATELY, WBEM_GENERIC_FLAG_TYPE, WBEM_S_FALSE,
 };
 
 use crate::driver::ec_bridge::SharedEcBridge;
@@ -61,6 +61,91 @@ fn extract_variant_u32(val: &VARIANT) -> Option<u32> {
             3 => Some(*(data_ptr as *const i32) as u32),         // VT_I4
             19 => Some(*(data_ptr as *const u32)),               // VT_UI4
             _ => None,
+        }
+    }
+}
+
+// Caller owns a COM apartment for the full lifetime of the enumerator.
+unsafe fn subscribe_acpi_events(
+    query: &str,
+) -> windows::core::Result<(IWbemLocator, IWbemServices, IEnumWbemClassObject)> {
+    let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)?;
+    let services = locator.ConnectServer(
+        &BSTR::from(r"root\WMI"),
+        &BSTR::new(),
+        &BSTR::new(),
+        &BSTR::new(),
+        0,
+        &BSTR::new(),
+        None,
+    )?;
+    let _ = CoSetProxyBlanket(
+        &services,
+        RPC_C_AUTHN_WINNT,
+        RPC_C_AUTHZ_NONE,
+        None,
+        RPC_C_AUTHN_LEVEL_CALL,
+        RPC_C_IMP_LEVEL_IMPERSONATE,
+        None,
+        EOAC_NONE,
+    );
+    let source = services.ExecNotificationQuery(
+        &BSTR::from("WQL"),
+        &BSTR::from(query),
+        WBEM_GENERIC_FLAG_TYPE((WBEM_FLAG_FORWARD_ONLY.0 | WBEM_FLAG_RETURN_IMMEDIATELY.0) as i32),
+        None,
+    )?;
+    Ok((locator, services, source))
+}
+
+pub enum ModeKeyEvent {
+    Subscribed,
+    Idle,
+    Pressed(u32),
+}
+
+/// Passive input for a host that already owns dispatch and hardware control.
+pub fn listen_mode_keys(mut observe: impl FnMut(ModeKeyEvent) -> bool) -> windows::core::Result<()> {
+    struct Apartment;
+    impl Drop for Apartment {
+        fn drop(&mut self) {
+            unsafe { CoUninitialize() };
+        }
+    }
+
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+        let _apartment = Apartment;
+        let (_locator, _services, source) = subscribe_acpi_events(
+            "SELECT * FROM AcpiTest_EventULong WHERE ULong=176 OR ULong=192 OR ULong=201",
+        )?;
+        let mut ready = false;
+        loop {
+            let mut rows = [None];
+            let mut returned = 0;
+            let status = source.Next(1000, &mut rows, &mut returned);
+            status.ok()?;
+            if status.0 == WBEM_S_FALSE.0 {
+                return Err(windows::core::HRESULT(WBEM_E_FAILED.0).into());
+            }
+            if !ready {
+                if !observe(ModeKeyEvent::Subscribed) {
+                    return Ok(());
+                }
+                ready = true;
+            }
+            let mut event = ModeKeyEvent::Idle;
+            if let Some(row) = rows[0].take() {
+                let mut value = VARIANT::default();
+                if row.Get(w!("ULong"), 0, &mut value, None, None).is_ok() {
+                    if let Some(code @ (176 | 192 | 201)) = extract_variant_u32(&value) {
+                        event = ModeKeyEvent::Pressed(code);
+                    }
+                }
+            }
+            if !observe(event) {
+                return Ok(());
+            }
         }
     }
 }
@@ -257,40 +342,8 @@ pub fn start_wmi_event_listener(ec_bridge: SharedEcBridge) {
                     let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
                     let res = (|| -> windows::core::Result<()> {
-                        let locator: IWbemLocator =
-                            CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)?;
-                        let namespace = BSTR::from(r"root\WMI");
-                        let services = locator.ConnectServer(
-                            &namespace,
-                            &BSTR::new(),
-                            &BSTR::new(),
-                            &BSTR::new(),
-                            0,
-                            &BSTR::new(),
-                            None,
-                        )?;
-
-                        let _ = CoSetProxyBlanket(
-                            &services,
-                            RPC_C_AUTHN_WINNT,
-                            RPC_C_AUTHZ_NONE,
-                            None,
-                            RPC_C_AUTHN_LEVEL_CALL,
-                            RPC_C_IMP_LEVEL_IMPERSONATE,
-                            None,
-                            EOAC_NONE,
-                        );
-
-                        let query_lang = BSTR::from("WQL");
-                        let query = BSTR::from("SELECT * FROM AcpiTest_EventULong");
-                        let enumerator: IEnumWbemClassObject = services.ExecNotificationQuery(
-                            &query_lang,
-                            &query,
-                            WBEM_GENERIC_FLAG_TYPE(
-                                (WBEM_FLAG_FORWARD_ONLY.0 | WBEM_FLAG_RETURN_IMMEDIATELY.0) as i32,
-                            ),
-                            None,
-                        )?;
+                        let (_locator, _services, enumerator) =
+                            subscribe_acpi_events("SELECT * FROM AcpiTest_EventULong")?;
 
                         consecutive_failures = 0;
                         crate::log_info!(

@@ -9,9 +9,10 @@ public sealed partial class MainWindow
     private bool brightnessApplying;
     private bool syncingBrightness;
     private int? requestedBrightness;
+    private long brightnessSubmitAfter;
     private int? DisplayedScreenBrightness=>requestedBrightness??screenBrightness;
     private Task? brightnessWork;
-    private Func<int,Task> writeBrightness=value=>Task.Run(()=>OpenRevo.Core.ScreenBrightness.Set(value));
+    private Func<int,Task> writeBrightness;
     private readonly Dictionary<int,Button> brightnessButtons=[];
     private ContentControl? miniRefreshHost;
     private Button? refreshMoreButton;
@@ -120,6 +121,11 @@ public sealed partial class MainWindow
         slider.ValueChanged+=async (_,_)=>
         {
             if(syncingBrightness||!ReferenceEquals(slider,brightnessSlider))return;
+            if(residentClient!=null&&brightnessEditing)
+            {
+                UpdateBrightnessValues();
+                return;
+            }
             await SetCompactBrightness((int)slider.Value);
         };
     }
@@ -129,10 +135,12 @@ public sealed partial class MainWindow
         int target=(int)slider.Value;brightnessEditing=false;
         await SetCompactBrightness(target);
     }
-    private Task SetCompactBrightness(int value)
+    private Task SetCompactBrightness(int value, bool coalesce = false)
     {
         if(value is <10 or >100)throw new ArgumentOutOfRangeException(nameof(value));
-        if(displayBusy||displayState?.Active!=true||closed)return Task.CompletedTask;
+        if(displayBusy||displayState?.Active!=true||closed||residentDetaching)return Task.CompletedTask;
+        brightnessSubmitAfter=coalesce&&residentClient!=null?Environment.TickCount64+100:0;
+        if(requestedBrightness==value&&brightnessWork is {IsCompleted:false})return brightnessWork;
         requestedBrightness=value;UpdateBrightnessValues();RefreshPaintedState();
         if(brightnessWork is {IsCompleted:false})return brightnessWork;
         return brightnessWork=ApplyRequestedBrightness();
@@ -144,20 +152,29 @@ public sealed partial class MainWindow
         {
             while(!closed&&requestedBrightness is int target)
             {
+                long wait=brightnessSubmitAfter-Environment.TickCount64;
+                if(wait>0&&!residentDetaching)
+                {
+                    await Task.Delay((int)wait);
+                    continue;
+                }
                 try
                 {
                     if(target!=screenBrightness)await writeBrightness(target);
-                    screenBrightness=target;
-                    if(requestedBrightness==target){requestedBrightness=null;ConfirmedActionOsd("屏幕亮度 · "+target+"%","brightness");}
+                    if(residentClient==null)screenBrightness=target;
+                    if(requestedBrightness==target){requestedBrightness=null;if(residentClient==null)ConfirmedActionOsd("屏幕亮度 · "+target+"%","brightness");}
                 }
                 catch(Exception error)
                 {
                     OpenRevo.Core.DiagnosticLog.Failure("brightness.apply",error,new{target});
-                    try{screenBrightness=await Task.Run(OpenRevo.Core.ScreenBrightness.Read);}catch{screenBrightness=null;}
+                    if(residentClient==null)
+                    {
+                        try{screenBrightness=await Task.Run(OpenRevo.Core.ScreenBrightness.Read);}catch{screenBrightness=null;}
+                    }
                     // A newer request remains eligible even if the old one failed.
                     if(requestedBrightness!=target)continue;
                     requestedBrightness=null;
-                    if(!closed)await ShowMessage("亮度未确认",error.Message);
+                    if(!closed&&!residentDetaching)await ShowMessage("亮度未确认",error.Message);
                     break;
                 }
                 if(!closed){UpdateBrightnessValues();RefreshPaintedState();}

@@ -2,8 +2,41 @@ namespace OpenRevo.Core.Hal;
 
 public sealed record FanProtocolState(int[] CpuUp, int[] CpuDown, int[] CpuDuty, int[] GpuUp, int[] GpuDown, int[] GpuDutyAndControl,
     byte Latch, byte ApControl, byte ModeIndex, byte Silent, byte Custom, byte Isolated, byte Ramp);
+#if GM7TG0M_DIAGNOSTICS
+internal sealed record OemFanSnapshotReceipt(byte Project, byte Platform, string Driver, PerformanceSnapshot Performance);
+#endif
+
 public sealed partial class HardwareSession
 {
+#if GM7TG0M_DIAGNOSTICS
+    internal OemFanSnapshotReceipt CaptureGm7tg0mFanSnapshot() => Serialized<OemFanSnapshotReceipt>(() =>
+    {
+        Guard();
+        if (!CanReadGm7tg0mFactoryMode)
+            throw new NotSupportedException("此诊断仅适用于已识别的 GM7TG0M（N.1.07MRO06）。");
+
+        const byte project = Gm7tg0mFactoryMode.Project, platform = Gm7tg0mFactoryMode.Platform;
+        using var ec = open();
+        void CheckIdentity()
+        {
+            if (ec.Read(Vault.ProjectId) != project || ec.Read(Vault.PlatformId) != platform)
+                throw new IOException("EC 项目或平台身份与预期不符。");
+        }
+
+        CheckIdentity();
+        var first = ReadPerformance(ec);
+        CheckIdentity();
+        var second = ReadPerformance(ec);
+        CheckIdentity();
+        Guard();
+        if (!SamePerformance(first, second) || first.Trigger != second.Trigger || first.Fans.Silent != second.Fans.Silent ||
+            first.Mode != second.Mode)
+            throw new IOException("两次读取的风扇表或控制状态发生变化，请等原厂档位稳定后重试。");
+
+        return new(project, platform, Admission.Driver, second);
+    });
+#endif
+
     public FanProtocolState ProbeFanProtocol() => Serialized(() =>
     {
         Guard(); using var ec = open();

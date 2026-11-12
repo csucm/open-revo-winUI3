@@ -5,19 +5,10 @@ using OpenRevo.Core;
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
-    private SessionPower? sessionPower;
-    private SessionPower? screenOffPower;
-    private uint screenOffInput;
-    private bool screenOffPending;
+    private bool keepAwakeEnabled=>residentClient!=null?residentSnapshot?.KeepAwake==true:hardwareRuntime.SessionPower.KeepAwakeEnabled;
     private void RestoreScreenRequestOnInput()
     {
-        if(screenOffPower==null||screenOffPending)return;
-        try
-        {
-            if(SessionPower.ReadLastInputTick()==screenOffInput)return;
-            screenOffPower.Dispose();screenOffPower=null;
-            if(sessionPower?.Enabled==true)sessionPower.SetKeepAwake(true);
-        }
+        try{hardwareRuntime.SessionPower.RestoreOnInput();}
         catch(Exception error){actions.Add("屏幕唤醒："+error.Message);}
     }
     private readonly Dictionary<string,Button> quickButtons=[];
@@ -35,23 +26,13 @@ public sealed partial class MainWindow
     private QuickState ReadQuickState()
     {
         int winGeneration=winStateGeneration;
-        bool? camera=null,mic=null,win=null;bool available=false;CameraState? pnp=null;
-        try{win=upstream?.ReadWindowsWinKeyLocked();}catch{}
-        try
-        {
-            if(hardware.CoreDelegated)
-            {
-                var devices=CameraControl.ReadWindowsCandidates();available=devices.Count>0;
-                pnp=devices.Count==1?devices[0]:null;
-                cameraWindowsDiagnostics=new{source="present Windows Camera-class devices; firmware power unknown",candidateCount=devices.Count,states=devices.Select(d=>d.Enabled).ToArray(),selection=devices.Count==1?"single Windows device":"not selected"};
-            }
-            else{pnp=CameraControl.Read();available=pnp!=null;}
-        }
-        catch(Exception error){cameraWindowsDiagnostics=new{error=DiagnosticJournal.Scrub(error.Message),hresult=$"0x{error.HResult:X8}"};}
-        try {if(hardware.Active){if(hardware.CoreDelegated)camera=pnp?.Enabled;else camera=hardware.ProbeSwitches().CameraPowered?pnp?.Enabled:false;}}catch{}
-        try {mic=upstream?.ReadMicrophone();}catch{}
-        try {if(!hardware.CoreDelegated && camera==true && upstream?.IsCameraAccessBlocked()==true)camera=false;}catch{camera=null;}
-        return new(camera,available,mic,win){WindowsDevice=hardware.CoreDelegated?pnp:null,WinGeneration=winGeneration};
+        return ToQuickState(hardwareRuntime.Switches.ReadShortcuts(),winGeneration);
+    }
+    private QuickState ToQuickState(DeviceShortcutRead result,int winGeneration)
+    {
+        cameraWindowsDiagnostics=result.CameraDiagnostics;
+        return new(result.Camera,result.CameraAvailable,result.Microphone,result.WinLocked)
+            {WindowsDevice=result.WindowsDevice,WinGeneration=winGeneration};
     }
     private void ApplyQuickRead(QuickState value)=>quickState=value with
     {WinLocked=value.WinGeneration==winStateGeneration&&requestedWinLocked==null?value.WinLocked:quickState.WinLocked};
@@ -82,13 +63,13 @@ public sealed partial class MainWindow
     {
         foreach(var(key,button)in quickButtons)
         {
-            bool selected=key switch{"camera"=>quickState.Camera==true,"mic"=>quickState.Microphone==true,"win"=>quickState.WinLocked==true,"awake"=>sessionPower?.Enabled==true,_=>false};
+            bool selected=key switch{"camera"=>quickState.Camera==true,"mic"=>quickState.Microphone==true,"win"=>quickState.WinLocked==true,"awake"=>keepAwakeEnabled,_=>false};
             string label=key switch
             {
                 "camera"=>quickState.Camera switch{true=>"相机已开",false=>"相机已关",_=>"相机未知"},
                 "mic"=>quickState.Microphone switch{true=>"麦克风",false=>"已静音",_=>"麦克风未知"},
                 "win"=>requestedWinLocked.HasValue?"切换中":quickState.WinLocked switch{true=>"已锁定",false=>"已解锁",_=>"Win键锁"},
-                "awake"=>sessionPower?.Enabled==true?"防休眠中":"防休眠",_=>"关闭屏幕"
+                "awake"=>keepAwakeEnabled?"防休眠中":"防休眠",_=>"关闭屏幕"
             };
             string glyph=key switch{"camera"=>quickState.Camera==true?"":"","mic"=>"","win"=>"","awake"=>"",_=>""};
             if(mini&&!Equals(button.Tag,label))
@@ -98,16 +79,17 @@ public sealed partial class MainWindow
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button,label);
             }
             button.IsEnabled=key switch{"camera"=>hardware.Active&&quickState.CameraAvailable&&quickState.Camera.HasValue&&upstream!=null,"mic"=>quickState.Microphone.HasValue&&upstream!=null,"win"=>upstream!=null&&quickState.WinLocked.HasValue,_=>true};
-            if(!mini){UpdateApprovedQuickButton(button,key,key switch{"camera"=>quickState.Camera,"mic"=>quickState.Microphone,"win"=>quickState.WinLocked,"awake"=>sessionPower?.Enabled==true,_=>false},quickBusy);continue;}
+            if(!mini){UpdateApprovedQuickButton(button,key,key switch{"camera"=>quickState.Camera,"mic"=>quickState.Microphone,"win"=>quickState.WinLocked,"awake"=>keepAwakeEnabled,_=>false},quickBusy);continue;}
             if(selected)button.Style=(Style)Application.Current.Resources["SelectedChoiceStyle"];else button.ClearValue(FrameworkElement.StyleProperty);
         }
     }
     private async Task RunQuickAction(string key)
     {
+        if(residentClient!=null){await RunResidentQuickActionAsync(key);return;}
         if(key=="win"){await RequestWinToggle();return;}
-        if(quickBusy||closed)return;
-        await operationQueue.WaitAsync();
-        if(closed){operationQueue.Release();return;}
+        if(quickBusy||closed||exitRequested)return;
+        bool needsQueue=key is "awake" or "screen";
+        if(needsQueue&&!await operationQueue.EnterAsync())return;
         quickBusy=true;
         quickGeneration++;
         try
@@ -115,84 +97,30 @@ public sealed partial class MainWindow
             switch(key)
             {
                 case "camera":
-                    if(hardware.CoreDelegated)
-                    {
-                        if(!hardware.Active||quickState.WindowsDevice is not {Enabled:bool before} expected)
-                            throw new IOException("当前 Windows 相机设备状态未知。");
-                        await Task.Run(()=>CameraControl.SetWindowsDeviceAsync(expected,!before));
-                        ApplyQuickRead(await Task.Run(ReadQuickState));
-                        break;
-                    }
+                    bool delegated=hardware.CoreDelegated;
                     ApplyQuickRead(await ToggleCameraThroughCore());
-                    if(quickState.Camera is bool camera)ConfirmShortcutOsd(6,camera?1u:0u);
+                    if(!delegated&&quickState.Camera is bool camera)ConfirmShortcutOsd(6,camera?1u:0u);
                     break;
                 case "mic":
-                    bool mic=await Task.Run(()=>{var value=upstream?.ReadMicrophone()??throw new IOException("未找到默认麦克风。");upstream!.SetMicrophone(!value);
-                        bool confirmed=upstream.ReadMicrophone()??throw new IOException("麦克风状态回读失败。");
-                        if(confirmed==value)throw new IOException("麦克风状态未改变。");
-                        return confirmed;});quickState=quickState with{Microphone=mic};ConfirmShortcutOsd(7,mic?1u:0u);break;
+                    bool mic=await hardwareRuntime.Switches.ToggleMicrophoneAsync();
+                    quickState=quickState with{Microphone=mic};ConfirmShortcutOsd(7,mic?1u:0u);break;
                 case "awake":
-                    sessionPower??=new SessionPower();sessionPower.SetKeepAwake(!sessionPower.Enabled);ConfirmShortcutOsd(10,sessionPower.Enabled?1u:0u);break;
+                    ConfirmShortcutOsd(10,hardwareRuntime.SessionPower.ToggleKeepAwake()?1u:0u);break;
                 case "screen":
-                    screenOffPending=true;
-                    try
-                    {
-                        sessionPower?.ReleaseDisplay();
-                        screenOffPower??=new SessionPower();screenOffPower.HoldSystemOnly();await Task.Delay(350);
-                        if(!closed)
-                        {
-                            screenOffInput=SessionPower.ReadLastInputTick();
-                            SessionPower.TurnOffScreen(WinRT.Interop.WindowNative.GetWindowHandle(this));
-                            ConfirmedActionOsd("息屏请求已发出","display");
-                        }
-                    }
-                    finally{screenOffPending=false;}
+                    if(await hardwareRuntime.SessionPower.TurnOffAsync(captionWindow)&&!closed)
+                        ConfirmedActionOsd("息屏请求已发出","display");
                     break;
             }
         }
         catch(System.ComponentModel.Win32Exception error) when(error.NativeErrorCode==1223){if(!closed)await ShowMessage("已取消","没有更改相机设置。");}
         catch(Exception error){actions.Add(error.ToString());if(!closed)await ShowMessage("设置未完成",error.Message);}
-        finally{quickBusy=false;lastQuickRead=DateTimeOffset.Now;operationQueue.Release();if(!closed){UpdateQuickActions();UpdateControlValues();}}
+        finally{quickBusy=false;lastQuickRead=DateTimeOffset.Now;if(needsQueue)operationQueue.Release();if(!closed){UpdateQuickActions();UpdateControlValues();}}
     }
     private async Task<QuickState> ToggleCameraThroughCore()
     {
-        if(!hardware.Active||upstream==null)throw new InvalidOperationException("请先连接硬件。");
-        var current=await Task.Run(ReadQuickState);
-        if(!current.Camera.HasValue)throw new IOException("无法确认相机状态，请检查设备管理器。");
-        bool enable=!current.Camera.Value,completed=false;
-        bool beforePowered=(await Task.Run(hardware.ProbeSwitches)).CameraPowered;
-        try
-        {
-            await Task.Run(()=>hardware.SetCameraPoweredViaCore(upstream,enable));
-            if(enable)
-            {
-                var pnp=await Task.Run(()=>
-                {
-                    CameraState? value=null;
-                    for(int i=0;i<30;i++)
-                    {
-                        value=CameraControl.Read();
-                        if(value?.Enabled.HasValue==true)return value;
-                        Thread.Sleep(100);
-                    }
-                    return value;
-                });
-                // The normal switch only changes the upstream hardware power bit.
-                // Repair a legacy Windows-disabled device once; do not disable it
-                // on every OFF action and demand elevation again at the next ON.
-                if(pnp?.Enabled==false || upstream.IsCameraAccessBlocked())await CameraControl.Request(true);
-                else if(pnp?.Enabled!=true)throw new IOException("相机尚未就绪，请稍后重试。");
-            }
-            var confirmed=await Task.Run(ReadQuickState);
-            if(confirmed.Camera!=enable)throw new IOException("相机状态未确认改变。");
-            completed=true;
-            return confirmed;
-        }
-        finally
-        {
-            if(!completed && !beforePowered && hardware.Active)
-                await Task.Run(()=>{if(hardware.ProbeSwitches().CameraPowered)hardware.SetCameraPoweredViaCore(upstream,false);});
-        }
+        int generation=winStateGeneration;
+        var result=await hardwareRuntime.Switches.ToggleCameraAsync(quickState.WindowsDevice);
+        return ToQuickState(result,generation);
     }
 }
 

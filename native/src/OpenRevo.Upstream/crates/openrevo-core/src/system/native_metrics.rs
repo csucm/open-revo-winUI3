@@ -114,40 +114,154 @@ impl Drop for CpuReader {fn drop(&mut self){if self.query!=0{if let Some(lib)=&s
 #[repr(C)]#[derive(Default)]struct Utilization{gpu:u32,memory:u32}
 /// NVML uses the same NVIDIA driver readings/units as upstream nvidia-smi,
 /// without launching its permanent poller or returning its startup placeholders.
-pub fn read_gpu()->GpuSample {
-    let mut sample=GpuSample::default();
-    if !crate::driver::gpu_bridge::is_nvidia_dgpu_available(){return sample;}
-    let path=match std::env::var_os("SystemRoot"){Some(root)=>std::path::PathBuf::from(root).join("System32/nvml.dll"),None=>return sample};
-    unsafe {
-        let lib=match Library::new(path){Ok(lib)=>lib,Err(_)=>return sample};
-        type Init=unsafe extern "C" fn()->i32;type Handle=unsafe extern "C" fn(u32,*mut *mut c_void)->i32;
-        type Scalar=unsafe extern "C" fn(*mut c_void,*mut u32)->i32;type Clock=unsafe extern "C" fn(*mut c_void,u32,*mut u32)->i32;
-        let(init,shutdown,handle)=match(symbol::<Init>(&lib,b"nvmlInit_v2"),symbol::<Init>(&lib,b"nvmlShutdown"),symbol::<Handle>(&lib,b"nvmlDeviceGetHandleByIndex_v2")){(Some(i),Some(s),Some(h))=>(i,s,h),_=>return sample};
-        if init()!=0{return sample;}
-        struct Guard(Init);impl Drop for Guard{fn drop(&mut self){unsafe{(self.0)();}}}let _guard=Guard(shutdown);
-        let mut device=ptr::null_mut();if handle(0,&mut device)!=0{return sample;}
-        // Name and sensors belong to the same NVML handle. Never substitute an
-        // unrelated Windows adapter name for this device-index-0 sample.
-        type GetName=unsafe extern "C" fn(*mut c_void,*mut std::ffi::c_char,u32)->i32;
-        if let Some(name)=symbol::<GetName>(&lib,b"nvmlDeviceGetName"){
-            let mut buffer=[0u8;96];
-            if name(device,buffer.as_mut_ptr().cast(),buffer.len() as u32)==0 {
-                if let Some(end)=buffer.iter().position(|b|*b==0){
-                    let value=String::from_utf8_lossy(&buffer[..end]).trim().to_owned();
-                    if !value.is_empty(){sample.adapter_name=Some(value);}
+pub fn read_gpu() -> GpuSample {
+    read_gpu_fields(GpuFields { temperature: true, utilization: true, clocks: true, memory: true, power: true, name: true })
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct GpuFields {
+    pub temperature: bool,
+    pub utilization: bool,
+    pub clocks: bool,
+    pub memory: bool,
+    pub power: bool,
+    pub name: bool,
+}
+impl GpuFields {
+    pub const TRAY: Self = Self { temperature: true, utilization: true, clocks: false, memory: false, power: false, name: false };
+}
+
+pub fn read_gpu_fields(fields: GpuFields) -> GpuSample {
+    GpuReader::default().read(fields)
+}
+
+type NvmlLifecycle = unsafe extern "C" fn() -> i32;
+type NvmlHandle = unsafe extern "C" fn(u32, *mut *mut c_void) -> i32;
+
+struct NvmlSession {
+    library: Library,
+    shutdown: NvmlLifecycle,
+    handle: NvmlHandle,
+}
+
+impl NvmlSession {
+    fn open() -> Option<Self> {
+        if !crate::driver::gpu_bridge::is_nvidia_dgpu_available() {
+            return None;
+        }
+        let path =
+            std::path::PathBuf::from(std::env::var_os("SystemRoot")?).join("System32/nvml.dll");
+        unsafe {
+            let library = Library::new(path).ok()?;
+            let init = symbol::<NvmlLifecycle>(&library, b"nvmlInit_v2")?;
+            let shutdown = symbol::<NvmlLifecycle>(&library, b"nvmlShutdown")?;
+            let handle = symbol::<NvmlHandle>(&library, b"nvmlDeviceGetHandleByIndex_v2")?;
+            if init() != 0 {
+                return None;
+            }
+            Some(Self {
+                library,
+                shutdown,
+                handle,
+            })
+        }
+    }
+}
+
+impl Drop for NvmlSession {
+    fn drop(&mut self) {
+        unsafe {
+            (self.shutdown)();
+        }
+    }
+}
+
+/// The caller owns this session for the lifetime of its permitted GPU demand.
+#[derive(Default)]
+pub struct GpuReader(Option<NvmlSession>);
+
+impl GpuReader {
+    pub fn read(&mut self, fields: GpuFields) -> GpuSample {
+        if self.0.is_none() {
+            self.0 = NvmlSession::open();
+        }
+        let Some(session) = self.0.as_ref() else {
+            return GpuSample::default();
+        };
+        let mut device = ptr::null_mut();
+        if unsafe { (session.handle)(0, &mut device) } != 0 || device.is_null() {
+            self.0 = None;
+            return GpuSample::default();
+        }
+        unsafe { read_nvml_fields(&session.library, device, fields) }
+    }
+}
+
+unsafe fn read_nvml_fields(lib: &Library, device: *mut c_void, fields: GpuFields) -> GpuSample {
+    let mut sample = GpuSample::default();
+    type Scalar = unsafe extern "C" fn(*mut c_void, *mut u32) -> i32;
+    type Clock = unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> i32;
+    // Name and sensors belong to the same NVML handle. Never substitute an
+    // unrelated Windows adapter name for this device-index-0 sample.
+    type GetName = unsafe extern "C" fn(*mut c_void, *mut std::ffi::c_char, u32) -> i32;
+    if fields.name {
+        if let Some(name) = symbol::<GetName>(lib, b"nvmlDeviceGetName") {
+            let mut buffer = [0u8; 96];
+            if name(device, buffer.as_mut_ptr().cast(), buffer.len() as u32) == 0 {
+                if let Some(end) = buffer.iter().position(|b| *b == 0) {
+                    let value = String::from_utf8_lossy(&buffer[..end]).trim().to_owned();
+                    if !value.is_empty() {
+                        sample.adapter_name = Some(value);
+                    }
                 }
             }
         }
-        if let Some(clock)=symbol::<Clock>(&lib,b"nvmlDeviceGetClockInfo"){
-            let mut v=0;if clock(device,0,&mut v)==0&&v<=10000 {sample.core_mhz=Some(v);}
-            if clock(device,2,&mut v)==0&&v<=30000 {sample.memory_mhz=Some(v);}
+    }
+    if fields.clocks {
+        if let Some(clock) = symbol::<Clock>(lib, b"nvmlDeviceGetClockInfo") {
+            let mut v = 0;
+            if clock(device, 0, &mut v) == 0 && v <= 10000 {
+                sample.core_mhz = Some(v);
+            }
+            if clock(device, 2, &mut v) == 0 && v <= 30000 {
+                sample.memory_mhz = Some(v);
+            }
         }
-        if let Some(temp)=symbol::<Clock>(&lib,b"nvmlDeviceGetTemperature"){let mut v=0;if temp(device,0,&mut v)==0&&v>0&&v<125{sample.temperature=Some(v);}}
-        if let Some(power)=symbol::<Scalar>(&lib,b"nvmlDeviceGetPowerUsage"){let mut v=0;if power(device,&mut v)==0&&v<1000000{sample.power_w=Some(v as f32/1000.);}}
-        type GetMemory=unsafe extern "C" fn(*mut c_void,*mut Memory)->i32;
-        if let Some(memory)=symbol::<GetMemory>(&lib,b"nvmlDeviceGetMemoryInfo"){let mut v=Memory::default();if memory(device,&mut v)==0&&v.total>0&&v.used<=v.total{sample.memory_total_bytes=Some(v.total);sample.memory_used_bytes=Some(v.used);}}
-        type GetUsage=unsafe extern "C" fn(*mut c_void,*mut Utilization)->i32;
-        if let Some(usage)=symbol::<GetUsage>(&lib,b"nvmlDeviceGetUtilizationRates"){let mut v=Utilization::default();if usage(device,&mut v)==0&&v.gpu<=100{sample.usage=Some(v.gpu);}}
+    }
+    if fields.temperature {
+        if let Some(temp) = symbol::<Clock>(lib, b"nvmlDeviceGetTemperature") {
+            let mut v = 0;
+            if temp(device, 0, &mut v) == 0 && v > 0 && v < 125 {
+                sample.temperature = Some(v);
+            }
+        }
+    }
+    if fields.power {
+        if let Some(power) = symbol::<Scalar>(lib, b"nvmlDeviceGetPowerUsage") {
+            let mut v = 0;
+            if power(device, &mut v) == 0 && v < 1000000 {
+                sample.power_w = Some(v as f32 / 1000.);
+            }
+        }
+    }
+    type GetMemory = unsafe extern "C" fn(*mut c_void, *mut Memory) -> i32;
+    if fields.memory {
+        if let Some(memory) = symbol::<GetMemory>(lib, b"nvmlDeviceGetMemoryInfo") {
+            let mut v = Memory::default();
+            if memory(device, &mut v) == 0 && v.total > 0 && v.used <= v.total {
+                sample.memory_total_bytes = Some(v.total);
+                sample.memory_used_bytes = Some(v.used);
+            }
+        }
+    }
+    type GetUsage = unsafe extern "C" fn(*mut c_void, *mut Utilization) -> i32;
+    if fields.utilization {
+        if let Some(usage) = symbol::<GetUsage>(lib, b"nvmlDeviceGetUtilizationRates") {
+            let mut v = Utilization::default();
+            if usage(device, &mut v) == 0 && v.gpu <= 100 {
+                sample.usage = Some(v.gpu);
+            }
+        }
     }
     sample
 }

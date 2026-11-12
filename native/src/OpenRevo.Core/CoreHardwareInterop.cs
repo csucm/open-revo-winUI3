@@ -55,14 +55,17 @@ public sealed partial class UpstreamCoreLibrary
     private readonly object winLockGate=new();
     public bool ReadWindowsWinKeyLocked()=>NativeWinLock();
     public bool SetWindowsWinKeyLocked(bool locked)=>NativeWinLock(locked);
+    internal bool ToggleWindowsWinKeyLocked() => NativeWinLock(2);
 
-    internal bool NativeWinLock(bool? locked = null)
+    internal bool NativeWinLock(bool? locked = null) => NativeWinLock(locked.HasValue ? (locked.Value ? 1 : 0) : -1);
+
+    private bool NativeWinLock(int command)
     {
         lock(winLockGate)
         {
             ObjectDisposedException.ThrowIf(library==0,this);
             var action=Marshal.GetDelegateForFunctionPointer<WinLock>(NativeLibrary.GetExport(library,"or_native_win_lock"));
-            int status=action(locked.HasValue?(locked.Value?1:0):-1);
+            int status=action(command);
             if(status is not (0 or 1))throw new IOException($"Core Win 键锁操作失败（{status}）。");
             return status==1;
         }

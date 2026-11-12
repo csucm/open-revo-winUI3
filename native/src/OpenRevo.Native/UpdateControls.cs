@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenRevo.Core;
+using OpenRevo.ResidentProtocol;
 
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
@@ -31,6 +32,7 @@ public sealed partial class MainWindow
     }
     private async Task CheckNativeUpdate()
     {
+        if (residentClient != null) { await RunResidentUpdateActionAsync(PanelApplicationAction.CheckUpdate); return; }
         if(updateBusy)return;updateBusy=true;updateMessage="正在检查社区版更新…";SyncUpdateControls();
         try
         {
@@ -43,6 +45,7 @@ public sealed partial class MainWindow
     }
     private async Task DownloadNativeUpdate()
     {
+        if (residentClient != null) { await RunResidentUpdateActionAsync(PanelApplicationAction.DownloadUpdate); return; }
         if(updateBusy||availableUpdate==null)return;
         if(!File.Exists(Path.Combine(AppContext.BaseDirectory,"unins000.exe"))){await ShowMessage("源码预览","自动安装更新仅适用于已安装的社区版。请使用发布页安装器。");return;}
         updateBusy=true;updateCancellation=new CancellationTokenSource();SyncUpdateControls();

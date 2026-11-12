@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace OpenRevo.Core;
@@ -29,13 +28,13 @@ public sealed class Telemetry
         double? cpu = ReadCpuPercent();
         var mem = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
         bool memoryOk = GlobalMemoryStatusEx(ref mem), batteryOk = GetSystemPowerStatus(out var power);
-        using var process = Process.GetCurrentProcess();
+        var footprint = ProcessResources.ReadFootprint();
         return new(cpu, memoryOk ? (mem.TotalPhysical - mem.AvailablePhysical) / 1073741824d : null,
             memoryOk ? mem.TotalPhysical / 1073741824d : null,
             batteryOk && power.BatteryPercent <= 100 && (power.BatteryFlags & 128) == 0 ? power.BatteryPercent : null,
             batteryOk && power.Ac <= 1 ? power.Ac == 1 : null,
             batteryOk && power.BatteryFlags != 255 && (power.BatteryFlags & 128) == 0 ? (power.BatteryFlags & 8) != 0 : null,
-            process.WorkingSet64 / 1048576d, process.PrivateMemorySize64 / 1048576d, DateTimeOffset.Now);
+            footprint.WorkingSet / 1048576d, footprint.PrivateUsage / 1048576d, DateTimeOffset.Now);
     }
     public void Reset() => sampled = false;
     public static bool? ReadAc() => GetSystemPowerStatus(out var power) && power.Ac <= 1 ? power.Ac == 1 : null;

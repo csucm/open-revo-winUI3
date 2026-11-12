@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using OpenRevo.Core;
+using OpenRevo.ResidentProtocol;
 
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
@@ -15,6 +16,8 @@ public sealed partial class MainWindow
 
     private void ResetOverviewBindings()
     {
+        overviewPowerTooltip = null;
+        overviewBoard = null;
         overviewMetrics=null;overviewModes=null;overviewTools=null;overviewSwitches=null;
         overviewBoost=null;overviewLowRefresh=null;overviewFanBar=null;
         overviewModeNotes.Clear();overviewModeAccent.Clear();overviewPending.Clear();extraSwitchButtons.Clear();overviewGpuBar=null;overviewVramBar=null;
@@ -121,13 +124,14 @@ public sealed partial class MainWindow
         var row=DesktopAlignedRow(leading,action);row.ColumnSpacing=8;
         var card=OverviewCard(row);card.Padding=new Thickness(12);return card;
     }
+    private bool OverviewTelemetryFresh => residentClient != null
+        ? residentOverview?.Fresh == true : overviewSampling.ReadState().IsFresh;
     private OverviewGpu? CurrentOverviewGpu =>
-        overviewTelemetry is { } data && data.TopologyGeneration == DisplayTopology.GpuGeneration &&
-        DateTimeOffset.Now - overviewTelemetryAt < TimeSpan.FromSeconds(6) ? data.Gpu : null;
+        overviewTelemetry is { } data && (residentClient != null ? data.GpuSampled : data.TopologyGeneration == DisplayTopology.GpuGeneration)
+            ? data.Gpu : null;
 
     private string? IntegratedGpuModel =>
-        overviewTelemetry is { Gpu: { ShowsSharedMemory: true, AdapterName: { } name } } data &&
-        data.TopologyGeneration == DisplayTopology.GpuGeneration ? name : null;
+        CurrentOverviewGpu is { ShowsSharedMemory: true, AdapterName: { } name } ? name : null;
 
     private bool OverviewUsesSharedMemory => CurrentOverviewGpu?.ShowsSharedMemory == true || PaintIntegratedOnly;
     private string OverviewMemoryTitle => OverviewUsesSharedMemory ? "共享 GPU 内存" : "显存";
@@ -141,7 +145,7 @@ public sealed partial class MainWindow
     {
         RefreshPaintedState();
         if(mini||currentPage!="overview")return;
-        var metrics=DateTimeOffset.Now-overviewTelemetryAt<TimeSpan.FromSeconds(6)?overviewTelemetry:null;
+        var metrics=overviewTelemetry;
         var cpu=metrics?.Cpu;var gpu=CurrentOverviewGpu;
         Put("overviewCpuMhz",cpu?.Mhz?.ToString()??"—");
         Put("overviewCpuPower",cpu?.PowerW is double cw?$"{(cpu.PowerEstimated?"估算 ":"")}{cw:0.0} W":"— W");
@@ -168,25 +172,25 @@ public sealed partial class MainWindow
         Put("overviewCpuTemp",temperature.Cpu?.ToString()??"—");Put("overviewGpuTemp",gpu?.Temperature?.ToString()??"—");
         Put("overviewCpuUsage",latest?.CpuPercent is double cpuUsage?$"{cpuUsage:0}%":"—%");
         Put("overviewCpuFan",ec.CpuFan?.ToString()??"—");Put("overviewGpuFan",ec.GpuFan?.ToString()??"—");
-        bool boost=(hardware.State?.FanBoost??ec.FanBoost)==true;
+        bool boost=PanelFanBoost==true;
         Put("overviewFanMode",boost?"强冷模式":ec.CpuFan.HasValue?"自动温控":"读取中");
         // No fan percentage is inferred from arbitrary RPM or temperature limits.
         if(overviewFanBar!=null){overviewFanBar.Value=boost?100:0;overviewFanBar.Opacity=boost?1:.35;}
-        Put("overviewPerformance",$"当前配置：{PerformanceName}模式 · "+(hardware.CurrentMode switch{1=>"低噪办公",2=>"日常娱乐与工作，平稳释放兼顾流畅散热",3=>"优先性能释放",4=>"使用自定义 CPU、GPU 与风扇配置",_=>"正在读取"}));
+        Put("overviewPerformance",$"当前配置：{PerformanceName}模式 · "+(PanelMode switch{1=>"低噪办公",2=>"日常娱乐与工作，平稳释放兼顾流畅散热",3=>"优先性能释放",4=>"使用自定义 CPU、GPU 与风扇配置",_=>"正在读取"}));
         string[] notes=["静音","均衡","狂暴","极客"];
-        foreach(var(mode,note)in overviewModeNotes)note.Text=hardware.CurrentMode==mode?"● 当前":notes[mode-1];
+        foreach(var(mode,note)in overviewModeNotes)note.Text=PanelMode==mode?"● 当前":notes[mode-1];
         string[] glyphs=["\uE70F","\uE945","\uEC4A","\uE713"];
         foreach(var(mode,button)in performanceButtons)
         {
-            button.IsEnabled=hardware.Active&&!hardwareBusy&&(mode==4?hardware.SupportsCustomTuning:hardware.SupportsPerformance);
-            bool selected=hardware.CurrentMode==mode;
+            button.IsEnabled=PanelHardwareActive&&!PanelTuningBusy&&(mode==4?PanelSupportsCustom:PanelSupportsPerformance);
+            bool selected=PanelMode==mode;
             if(overviewModeAccent.TryGetValue(mode,out bool old)&&old!=selected&&button.Content is StackPanel body)
             {body.Children.RemoveAt(0);body.Children.Insert(0,ApprovedIcons.Create(mode switch{1=>"mode-office",2=>"mode-balanced",3=>"mode-performance",_=>"mode-custom"},mini?28:mode==4?34:24,selected,mini||mode!=4));overviewModeAccent[mode]=selected;}
         }
-        Put("approvedBatteryLimit",hardware.State is {} batteryState?batteryState.Upper+"%":"—");if(approvedBatteryMiniFill!=null)approvedBatteryMiniFill.RenderTransform=new ScaleTransform{ScaleX=(latest?.BatteryPercent??0)/100d,ScaleY=1};
+        Put("approvedBatteryLimit",PanelBatteryLimit is int batteryLimit?batteryLimit+"%":"—");if(approvedBatteryMiniFill!=null)approvedBatteryMiniFill.RenderTransform=new ScaleTransform{ScaleX=(latest?.BatteryPercent??0)/100d,ScaleY=1};
         Put("overviewProfile",PerformanceName);Put("overviewRefresh",displayState is {} ds?ds.Hertz+" Hz":"— Hz");
         UpdateOverviewPowerTarget();
-        if(overviewBoost!=null){overviewBoost.IsEnabled=hardware.Active&&!hardwareBusy&&hardware.SupportsFanBoost;UpdateApprovedQuickButton(overviewBoost,"boost",hardware.State?.FanBoost??ec.FanBoost);}
+        if(overviewBoost!=null){overviewBoost.IsEnabled=PanelHardwareActive&&!PanelHardwareActionBusy(PanelOperation.ToggleFanBoost)&&PanelSupportsBoost;UpdateApprovedQuickButton(overviewBoost,"boost",PanelFanBoost);}
         if(overviewLowRefresh!=null){Put("approvedAutoRefresh",lowRefreshOnBattery?"已开启":"已关闭");SetChoiceVisual(overviewLowRefresh,lowRefreshOnBattery);}
     }
 }

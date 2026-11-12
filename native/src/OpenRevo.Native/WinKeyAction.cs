@@ -33,7 +33,7 @@ public sealed partial class MainWindow
                 // transaction, or optimistic firmware state participates here.
                 bool locked=winWriterOverride!=null
                     ?(await winWriterOverride(target)).WinKeyLocked
-                    :await Task.Run(()=>upstream!.SetWindowsWinKeyLocked(target));
+                    :await hardwareRuntime.Switches.SetWinLockAsync(target);
                 if(locked!=target)throw new IOException("Windows Win 软件锁未确认改变。");
                 double nativeMs=watch.Elapsed.TotalMilliseconds;
                 winStateGeneration++;
@@ -50,7 +50,7 @@ public sealed partial class MainWindow
             requestedWinLocked=null;
             winStateGeneration++;
             quickState=quickState with{WinLocked=null};
-            try{if(upstream!=null)quickState=quickState with{WinLocked=await Task.Run(upstream.ReadWindowsWinKeyLocked)};}catch{}
+            try{if(upstream!=null)quickState=quickState with{WinLocked=await Task.Run(hardwareRuntime.Switches.ReadWinLock)};}catch{}
             actions.Add(error.ToString());
             if(!closed)await ShowMessage("Windows Win 软件锁设置未完成",error.Message);
         }
@@ -67,7 +67,7 @@ public sealed partial class MainWindow
         int generation=winStateGeneration;
         try
         {
-            bool locked=await Task.Run(upstream.ReadWindowsWinKeyLocked);
+            bool locked=await Task.Run(hardwareRuntime.Switches.ReadWinLock);
             if(!closed&&generation==winStateGeneration&&requestedWinLocked==null)
             {winStateGeneration++;quickState=quickState with{WinLocked=locked};UpdateQuickActions();UpdateControlValues();}
         }

@@ -35,7 +35,7 @@ public sealed partial class MainWindow
             var fans=new FanProtocolState(new int[16],new int[16],new int[16],new int[16],new int[16],new int[16],4,129,16,0,65,128,10);
             tuningBaseline=new(new(fans,0,0),new(65,90,140,10,2,0,25,0,115,135,185,10,35,55,90,65,90,140),new(new("Review fixture GPU",true,true,60,115,25,250,1000),new(0,0)),100);
             tuningDraft=tuningBaseline.CreateDraft();tuningStatus="隔离布局样本；未连接硬件。";
-            colorDraft=JsonNode.Parse("{\"id\":\"layout-fixture\",\"name\":\"隔离布局样本\",\"color_temp_k\":6500,\"saturation\":1,\"contrast\":1,\"gamma\":1,\"gain_r\":1,\"gain_g\":1,\"gain_b\":1}")!.AsObject();
+            colorDraft=ColorPreset.Parse("{\"id\":\"layout-fixture\",\"name\":\"隔离布局样本\",\"color_temp_k\":6500,\"saturation\":1,\"contrast\":1,\"gamma\":1,\"gain_r\":1,\"gain_g\":1,\"gain_b\":1}");
             foreach(var theme in new[]{ElementTheme.Light,ElementTheme.Dark})
             foreach(int width in new[]{1180,840})
             {

@@ -1,11 +1,15 @@
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using System.Runtime.InteropServices;
+using Windows.Graphics;
 
 namespace OpenRevo.Native;
 public sealed partial class MainWindow
 {
     private double captionScale;
+    private FrameworkElement? captionDragArea, captionActionArea;
+    private InputNonClientPointerSource? miniCaptionInput;
     [StructLayout(LayoutKind.Sequential)]private struct CaptionRect{public int Left,Top,Right,Bottom;}
     [StructLayout(LayoutKind.Sequential)]private struct CaptionPoint{public int X,Y;}
     [DllImport("dwmapi.dll")]private static extern int DwmGetWindowAttribute(nint window,uint attribute,out CaptionRect rect,uint size);
@@ -39,5 +43,49 @@ public sealed partial class MainWindow
         else captionGrid.RenderTransform=new TranslateTransform{Y=offset};
         if(panelToggle!=null)panelToggle.Height=height;
         if(themeToggle!=null)themeToggle.Height=height;
+        UpdateMiniCaptionRegions();
+    }
+
+    private void UpdateMiniCaptionRegions()
+    {
+        if (closed || captionDragArea is not { XamlRoot: { } xamlRoot } drag) return;
+        if (!mini)
+        {
+            if (miniCaptionInput == null) return;
+            miniCaptionInput.ClearRegionRects(NonClientRegionKind.Caption);
+            miniCaptionInput.ClearRegionRects(NonClientRegionKind.Passthrough);
+            miniCaptionInput = null;
+            SetTitleBar(drag);
+            return;
+        }
+
+        double scale = xamlRoot.RasterizationScale;
+        if (scale <= 0 || drag.ActualWidth <= 0 || drag.ActualHeight <= 0) return;
+        var dragRegion = CaptionRegion(drag, scale);
+        if (dragRegion.Width <= 0 || dragRegion.Height <= 0) return;
+
+        // In Mini, declare the native drag and button regions from the current layout.
+        if (miniCaptionInput == null)
+        {
+            miniCaptionInput = InputNonClientPointerSource.GetForWindowId(AppWindow.Id);
+            SetTitleBar(null);
+        }
+        miniCaptionInput.SetRegionRects(NonClientRegionKind.Caption, [dragRegion]);
+        if (captionActionArea is { ActualWidth: > 0, ActualHeight: > 0 } actions)
+        {
+            var actionRegion = CaptionRegion(actions, scale);
+            if (actionRegion.Width > 0 && actionRegion.Height > 0)
+                miniCaptionInput.SetRegionRects(NonClientRegionKind.Passthrough, [actionRegion]);
+        }
+    }
+
+    private static RectInt32 CaptionRegion(FrameworkElement element, double scale)
+    {
+        var bounds = element.TransformToVisual(null).TransformBounds(new(0, 0, element.ActualWidth, element.ActualHeight));
+        int left = Math.Max(0, (int)Math.Round(bounds.Left * scale));
+        int top = Math.Max(0, (int)Math.Round(bounds.Top * scale));
+        int right = (int)Math.Round(bounds.Right * scale);
+        int bottom = (int)Math.Round(bounds.Bottom * scale);
+        return new(left, top, Math.Max(0, right - left), Math.Max(0, bottom - top));
     }
 }

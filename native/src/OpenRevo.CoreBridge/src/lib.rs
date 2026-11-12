@@ -7,9 +7,40 @@ use std::{panic::catch_unwind, ptr};
 mod native_overview;
 mod native_services;
 mod native_admission;
+mod session_power;
+mod system_preferences;
+mod app_preferences;
+mod resident_entry;
+mod resident_panel;
+mod resident_pipe;
+mod resident_wake;
 use native_overview::{metrics_sample,native_switches,NativeEventSink};
 
 const REVISION: &str = "72e98685b2c0538fa0a58409a6bcce9e7b6336f7";
+
+/// Blocking read on the caller's thread. The callback receives 1 at subscription,
+/// 0 on a bounded idle wait, and the scan code on input. Return 0 to stop.
+#[no_mangle]
+pub extern "C" fn or_native_listen_mode_keys(observe: Option<extern "C" fn(u32) -> i32>) -> i32 {
+    use openrevo_core::driver::wmi_event_listener::{listen_mode_keys, ModeKeyEvent};
+
+    let Some(observe) = observe else {
+        return 0x80070057_u32 as i32; // E_INVALIDARG
+    };
+    catch_unwind(|| {
+        match listen_mode_keys(|event| {
+            observe(match event {
+                ModeKeyEvent::Subscribed => 1,
+                ModeKeyEvent::Idle => 0,
+                ModeKeyEvent::Pressed(code) => code,
+            }) != 0
+        }) {
+            Ok(()) => 0,
+            Err(error) => error.code().0,
+        }
+    })
+    .unwrap_or(0x80004005_u32 as i32) // E_FAIL
+}
 
 #[no_mangle]
 pub extern "C" fn or_native_abi_version() -> u32 {
@@ -111,7 +142,7 @@ pub unsafe extern "C" fn or_native_query(
             17 => json!(native_services::last_error()),
             18 => json!(openrevo_core::system::config::get_default_builtin_presets()),
             19 => json!({"level":openrevo_core::system::logger::get_log_level(),"filter":openrevo_core::system::logger::get_log_filter(),"path":openrevo_core::system::logger::get_log_path().to_string_lossy()}),
-            20 => native_admission::probe(),
+            20 => native_admission::probe_with_mode_sample(mode == 1),
             21 if (1..=3).contains(&mode) => json!(openrevo_core::system::power::get_mode_fan_table(mode as u8)),
             22 => match openrevo_core::system::display_tuning::native_color_probe(){
                 Ok(matrix)=>json!({"read_only":true,"matrix":matrix}),
@@ -248,6 +279,18 @@ pub extern "C" fn or_native_microphone_set(enabled: u32) -> i32 {
     }).unwrap_or(-2)
 }
 
+#[no_mangle]
+pub extern "C" fn or_native_microphone_toggle() -> i32 {
+    use openrevo_core::system::switches::audio::{toggle_microphone, MicrophoneToggleError};
+    catch_unwind(|| match toggle_microphone() {
+        Ok(enabled) => i32::from(enabled),
+        Err(MicrophoneToggleError::NoEndpoint) => -6,
+        Err(MicrophoneToggleError::EndpointChanged) => -7,
+        Err(MicrophoneToggleError::NotConfirmed) => -4,
+    })
+    .unwrap_or(-2)
+}
+
 // Only the camera power bit is exposed. No arbitrary EC address, global camera
 // policy, bulk PnP class switch, driver initialization or worker startup.
 #[no_mangle]
@@ -283,3 +326,5 @@ pub extern "C" fn or_native_camera_access_allow() -> i32 {
 
 
 
+
+pub mod resident;

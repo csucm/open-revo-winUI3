@@ -17,6 +17,7 @@ ehthumbs.db
 **/bin-*/
 **/obj/
 **/target/
+/.build/
 native/app-*/
 native/core-proof/
 native/evidence/

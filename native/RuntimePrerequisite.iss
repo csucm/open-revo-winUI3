@@ -157,9 +157,14 @@ begin
     begin
       WizardForm.CancelButton.Enabled := False;
       RuntimeStatus.Caption := '正在打开微软 .NET 安装程序。请完成安装；本程序不会自动重启电脑。';
-      { Interactive Microsoft setup retains its publisher/UAC and consent screens. }
+      { An already elevated installer starts the prerequisite with the same token. }
+      #ifdef InstallerPreflight
+      if not Exec(ExpandConstant('{tmp}\') + RuntimeInstallerName,
+        '/install /norestart', '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode) then
+      #else
       if not ShellExec('open', ExpandConstant('{tmp}\') + RuntimeInstallerName,
         '/install /norestart', '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode) then
+      #endif
         RuntimeStatus.Caption := '无法打开微软安装程序。可以重试下载。'
       else if Net10RuntimeReady() then
       begin
@@ -215,6 +220,9 @@ end;
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := (PageID = RuntimePage.ID) and Net10RuntimeReady();
+  #ifdef InstallerPreflight
+  if PageID = wpSelectDir then Result := HasExistingInstall();
+  #endif
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -231,7 +239,13 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   if not Net10RuntimeReady() then
-    Result := '需要 .NET 10 x64 桌面运行时。请重新运行安装包，并按引导下载所需运行时。';
+    Result := '需要 .NET 10 x64 桌面运行时。请重新运行安装包，并按引导下载所需运行时。'
+  #ifdef InstallerPreflight
+  else
+    Result := CheckInstallDirectory();
+  #else
+  ;
+  #endif
 end;
 
 

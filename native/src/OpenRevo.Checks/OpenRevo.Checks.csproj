@@ -4,6 +4,6 @@
   <ItemGroup><Compile Include="../OpenRevo.Native/DesktopGridGeometry.cs" Link="DesktopGridGeometry.cs" /></ItemGroup>
   <ItemGroup><Compile Include="../OpenRevo.Native/OsdFramePolicy.cs" Link="OsdFramePolicy.cs" /></ItemGroup>
   <ItemGroup><Compile Include="../OpenRevo.Native/WindowBrandIcon.cs" Link="WindowBrandIcon.cs" /></ItemGroup>
-  <ItemGroup><Compile Include="../OpenRevo.Native/PanelMotionGeometry.cs" Link="PanelMotionGeometry.cs" /><Compile Include="../OpenRevo.Native/CaptionHoverState.cs" Link="CaptionHoverState.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../OpenRevo.Native/PanelHandoffGeometry.cs" Link="PanelHandoffGeometry.cs" /><Compile Include="../OpenRevo.Native/CaptionHoverState.cs" Link="CaptionHoverState.cs" /></ItemGroup>
 </Project>
 
