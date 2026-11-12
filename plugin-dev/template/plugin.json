@@ -1,0 +1,10 @@
+{
+  "apiMajor": 1,
+  "id": "my-first-plugin",
+  "name": "我的第一个插件",
+  "version": "1.0.0",
+  "entryAssembly": "PluginStarter.dll",
+  "entryType": "PluginStarter.Plugin",
+  "permissions": ["ui.view"],
+  "background": false
+}

@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../OpenRevo.Release.props" />
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(ResidentInstalledHost)' == 'true'">
+    <DefineConstants>$(DefineConstants);RESIDENT_INSTALLED_HOST</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../OpenRevo.Core/OpenRevo.Core.csproj" />
+    <ProjectReference Include="../OpenRevo.ResidentProtocol/OpenRevo.ResidentProtocol.csproj" />
+    <ProjectReference Include="../OpenRevo.PluginHost/OpenRevo.PluginHost.csproj" />
+    <ProjectReference Include="../OpenRevo.PluginWorker/OpenRevo.PluginWorker.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <Content Include="../OpenRevo.Native/App.ico" Link="App.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CopyResidentPluginWorker" AfterTargets="Build">
+    <MSBuild Projects="../OpenRevo.PluginWorker/OpenRevo.PluginWorker.csproj" Targets="GetTargetPath"
+             BuildInParallel="false" Properties="Configuration=$(Configuration);Platform=$(Platform);RuntimeIdentifier=win-x64">
+      <Output TaskParameter="TargetOutputs" ItemName="_ResidentWorkerAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <_ResidentWorkerDirectory Include="@(_ResidentWorkerAssembly->'%(RootDir)%(Directory)')" />
+      <_ResidentWorkerPayload Include="@(_ResidentWorkerDirectory->'%(Identity)OpenRevo.PluginWorker.exe');@(_ResidentWorkerDirectory->'%(Identity)OpenRevo.PluginWorker.dll');@(_ResidentWorkerDirectory->'%(Identity)OpenRevo.PluginWorker.deps.json');@(_ResidentWorkerDirectory->'%(Identity)OpenRevo.PluginWorker.runtimeconfig.json');@(_ResidentWorkerDirectory->'%(Identity)OpenRevo.PluginSdk.dll')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_ResidentWorkerPayload)" DestinationFolder="$(TargetDir)PluginWorker" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishResidentPluginWorker" AfterTargets="Publish">
+    <ItemGroup><_PublishedResidentWorker Include="$(TargetDir)PluginWorker/*" /></ItemGroup>
+    <Copy SourceFiles="@(_PublishedResidentWorker)" DestinationFolder="$(PublishDir)PluginWorker" />
+  </Target>
+</Project>

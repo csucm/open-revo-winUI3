@@ -1,0 +1,4 @@
+LIBRARY InstallerFolderFilter
+EXPORTS
+    BeginDirectoryFilter=_BeginDirectoryFilter@0
+    EndDirectoryFilter=_EndDirectoryFilter@0

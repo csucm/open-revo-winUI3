@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0-windows10.0.26100.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../OpenRevo.Core/OpenRevo.Core.csproj" /></ItemGroup>
+  <ItemGroup><Compile Include="../OpenRevo.Native/DesktopGridGeometry.cs" Link="DesktopGridGeometry.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../OpenRevo.Native/OsdFramePolicy.cs" Link="OsdFramePolicy.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../OpenRevo.Native/WindowBrandIcon.cs" Link="WindowBrandIcon.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../OpenRevo.Native/PanelHandoffGeometry.cs" Link="PanelHandoffGeometry.cs" /><Compile Include="../OpenRevo.Native/CaptionHoverState.cs" Link="CaptionHoverState.cs" /></ItemGroup>
+</Project>
+

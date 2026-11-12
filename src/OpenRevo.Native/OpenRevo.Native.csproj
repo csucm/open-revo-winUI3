@@ -1,0 +1,110 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../OpenRevo.Release.props" />
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>OpenRevo.Native</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>App.ico</ApplicationIcon>
+    <Platforms>x64</Platforms><PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI><WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <SelfContained>false</SelfContained>
+    <RollForward>LatestPatch</RollForward>
+    <EnableWinAppRunSupport>false</EnableWinAppRunSupport><WinUISDKReferences>false</WinUISDKReferences>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin*/**;obj/**</DefaultItemExcludes>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <PublishTrimmed>false</PublishTrimmed><PublishReadyToRun>false</PublishReadyToRun>
+    <Version>0.7.0</Version><Description>Open-Revo native control panel</Description>
+    <BuildChannel Condition="'$(BuildChannel)'==''">public</BuildChannel>
+    <NativePluginFolderEntry Condition="'$(NativePluginFolderEntry)'==''">true</NativePluginFolderEntry>
+    <Title>Open-Revo</Title><Product>Open-Revo</Product><Company>Open-Revo Community</Company>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(DesignReviewHost)'=='true'">
+    <AssemblyName>OpenRevo.DesignReview</AssemblyName>
+    <DefineConstants>$(DefineConstants);DESIGN_REVIEW_HOST</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(NativePluginPreviewHost)'=='true'">
+    <AssemblyName>OpenRevo.PluginPreview</AssemblyName>
+    <ApplicationManifest>plugin-preview.manifest</ApplicationManifest>
+    <DefineConstants>$(DefineConstants);DESIGN_REVIEW_HOST;NATIVE_PLUGIN_PREVIEW_HOST</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(NativePluginFolderEntry)'=='true'">
+    <DefineConstants>$(DefineConstants);NATIVE_PLUGIN_FOLDER_ENTRY</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Gm7tg0mDiagnostics)'=='true'">
+    <DefineConstants>$(DefineConstants);GM7TG0M_DIAGNOSTICS</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(PanelShapeReviewHost)'=='true'">
+    <AssemblyName>OpenRevo.PanelShapeReview</AssemblyName>
+    <DefineConstants>$(DefineConstants);DESIGN_REVIEW_HOST;PANEL_SHAPE_REVIEW_HOST</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(OsdPowerReviewHost)'=='true'">
+    <AssemblyName>OpenRevo.OsdPowerReview</AssemblyName>
+    <DefineConstants>$(DefineConstants);DESIGN_REVIEW_HOST;OSD_POWER_REVIEW_HOST</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(CapsUiReviewHost)'=='true'">
+    <AssemblyName>OpenRevo.DesignReview</AssemblyName>
+    <DefineConstants>$(DefineConstants);DESIGN_REVIEW_HOST;CAPS_UI_REVIEW_HOST</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(AdmissionReviewHost)'=='true'">
+    <AssemblyName>OpenRevo.DesignReview</AssemblyName>
+    <DefineConstants>$(DefineConstants);DESIGN_REVIEW_HOST;ADMISSION_REVIEW_HOST</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(ResidentPanelHost)'=='true'">
+    <AssemblyName>OpenRevo.ResidentNativePanel</AssemblyName>
+    <AssemblyName Condition="'$(NativeResidentCore)'=='true'">Open Revo</AssemblyName>
+    <AssemblyTitle>Open Revo</AssemblyTitle><Description>Open Revo</Description><Product>Open Revo</Product>
+    <ApplicationManifest>resident-panel.manifest</ApplicationManifest>
+    <DefineConstants>$(DefineConstants);RESIDENT_PANEL_HOST</DefineConstants>
+    <DefineConstants Condition="'$(NativeResidentCore)'=='true'">$(DefineConstants);NATIVE_RESIDENT_CORE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="BuildChannel" Value="$(BuildChannel)" />
+    <AssemblyMetadata Include="NativePluginFolderEntry" Value="$(NativePluginFolderEntry)" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
+    <!-- WinUI still declares this dependency. Exclude its build, compile and runtime assets from Open-Revo. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="[1.0.3719.77]" ExcludeAssets="all" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.5.1" />
+    <ProjectReference Include="../OpenRevo.Core/OpenRevo.Core.csproj" />
+    <ProjectReference Include="../OpenRevo.ResidentProtocol/OpenRevo.ResidentProtocol.csproj" />
+    <ProjectReference Include="../OpenRevo.PluginHost/OpenRevo.PluginHost.csproj" />
+    <ProjectReference Include="../OpenRevo.PluginSdk/OpenRevo.PluginSdk.csproj" />
+    <ProjectReference Include="../OpenRevo.PluginWorker/OpenRevo.PluginWorker.csproj" ReferenceOutputAssembly="false" Private="false"
+                      Condition="'$(ResidentPanelHost)'!='true'" />
+    <Content Include="App.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets/Approved/*.svg;Assets/Nav/*-original.svg;Assets/Nav/*-original-dark.svg"
+             Exclude="Assets/Approved/volume-*.svg;Assets/Approved/warning-*.svg" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets/Community/*.png;Assets/Community/*.jpg" CopyToOutputDirectory="PreserveNewest" />
+    <Content Update="Assets/Approved/LUCIDE-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Update="Assets/Nav/LUCIDE-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+
+  </ItemGroup>
+  <Target Name="CopyNativePluginWorker" AfterTargets="Build" Condition="'$(ResidentPanelHost)'!='true'">
+    <MakeDir Directories="$(TargetDir)plugins" />
+    <MSBuild Projects="../OpenRevo.PluginWorker/OpenRevo.PluginWorker.csproj" Targets="GetTargetPath"
+             BuildInParallel="false" Properties="Configuration=$(Configuration);Platform=$(Platform);RuntimeIdentifier=win-x64">
+      <Output TaskParameter="TargetOutputs" ItemName="_NativePluginWorkerAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <_NativePluginWorkerDirectory Include="@(_NativePluginWorkerAssembly->'%(RootDir)%(Directory)')" />
+      <_NativePluginWorkerPayload Include="@(_NativePluginWorkerDirectory->'%(Identity)OpenRevo.PluginWorker.exe');@(_NativePluginWorkerDirectory->'%(Identity)OpenRevo.PluginWorker.dll');@(_NativePluginWorkerDirectory->'%(Identity)OpenRevo.PluginWorker.deps.json');@(_NativePluginWorkerDirectory->'%(Identity)OpenRevo.PluginWorker.runtimeconfig.json');@(_NativePluginWorkerDirectory->'%(Identity)OpenRevo.PluginSdk.dll')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_NativePluginWorkerPayload)" DestinationFolder="$(TargetDir)PluginWorker" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishNativePluginWorker" AfterTargets="Publish" Condition="'$(ResidentPanelHost)'!='true'">
+    <ItemGroup><_PublishedPluginWorker Include="$(TargetDir)PluginWorker/*" /></ItemGroup>
+    <Copy SourceFiles="@(_PublishedPluginWorker)" DestinationFolder="$(PublishDir)PluginWorker" />
+  </Target>
+  <Target Name="PublishUnpackagedXamlResources" AfterTargets="Publish" Condition="'$(PublishSingleFile)'!='true'">
+    <Error Condition="!Exists('$(TargetDir)App.xbf') Or !Exists('$(TargetDir)$(AssemblyName).pri')" Text="Compiled XAML resources are missing; refusing to publish an incomplete app." />
+    <Copy SourceFiles="$(TargetDir)App.xbf;$(TargetDir)$(AssemblyName).pri" DestinationFolder="$(PublishDir)" />
+  </Target>
+</Project>
+
+
+

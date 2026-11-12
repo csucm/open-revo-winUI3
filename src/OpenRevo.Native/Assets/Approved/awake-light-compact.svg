@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><title>保持唤醒</title><rect width="24" height="24" rx="8" fill="#ECE5DE"/><g transform="translate(3.0 3.0) scale(0.75)" fill="none" stroke="#9B5F1B" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path xmlns="http://www.w3.org/2000/svg" d="M10 2v2" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M14 2v2" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M6 2v2" />
+</g></svg>

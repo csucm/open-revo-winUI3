@@ -1,0 +1,22 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project>
+  <PropertyGroup>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+    <JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <_ComObjectDescriptorSupport>true</_ComObjectDescriptorSupport>
+    <_DefaultValueAttributeSupport>true</_DefaultValueAttributeSupport>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+  </PropertyGroup>
+  <Target Name="PreserveDynamicContracts" BeforeTargets="_RunILLink">
+    <ItemGroup>
+      <ManagedAssemblyToLink Update="@(ManagedAssemblyToLink)" Condition="'%(Filename)' == 'OpenRevo.Native' Or '%(Filename)' == 'OpenRevo.Core' Or '%(Filename)' == 'Microsoft.Windows.SDK.NET' Or '%(Filename)' == 'WinRT.Runtime' Or '%(Filename)' == 'Microsoft.WinUI' Or '%(Filename)' == 'Microsoft.InteractiveExperiences.Projection' Or '%(Filename)' == 'Microsoft.CSharp' Or '%(Filename)' == 'System.Linq.Expressions' Or '%(Filename)' == 'System.Text.Json'">
+        <TrimMode>copy</TrimMode>
+      </ManagedAssemblyToLink>
+    </ItemGroup>
+  </Target>
+  <ItemGroup>
+    <TrimmerRootDescriptor Include="$(MSBuildThisFileDirectory)CompactRoots.xml" />
+  </ItemGroup>
+</Project>

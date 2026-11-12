@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><title>自定义</title><rect width="24" height="24" rx="8" fill="#30404E"/><g transform="translate(3.0 3.0) scale(0.75)" fill="none" stroke="#7BCEE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path xmlns="http://www.w3.org/2000/svg" d="M10 5H3" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M12 19H3" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M14 3v4" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M16 17v4" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M21 12h-9" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M21 19h-5" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M21 5h-7" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M8 10v4" />
+  <path xmlns="http://www.w3.org/2000/svg" d="M8 12H3" />
+</g></svg>

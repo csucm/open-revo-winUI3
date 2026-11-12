@@ -1,0 +1,19 @@
+https://github.com/faintonce/open-revo
+Branch: dev
+Commit: 72e98685b2c0538fa0a58409a6bcce9e7b6336f7
+Core base source, config and resources were copied from this revision. Standalone workspace manifest added.
+Native adaptations: bounded native_metrics and native_services; display_tuning extracted from the same revision's Tauri system module. Sleep policy errors and acknowledged EC lighting writes are checked; Native color/ICC preferences use isolated OpenRevoNative storage and read-only enumeration does not deploy Windows profiles. See ../../DESKTOP-SERVICES.md and project evidence for current changes. Original GPL license is retained.
+2026-11-06 native_metrics local patch: GpuSample.adapter_name is read through nvmlDeviceGetName from the same index-0 device handle used for existing sensors. Preserve during selective Core updates; this display name does not authorize merging Windows adapter fields or changing sampling gates.
+
+2026-10-31: Core and registry synchronized to latest dev (Core 0.9.5). Lighting acknowledgements and isolated Native service patches were three-way preserved. Native custom overlay follows upstream mode4 Balanced. Tauri plugins/cloud ICC/CPU Guardian/GPU curve plugins are not integrated into the native host.
+
+2026-11-04 update check only: live dev head is 33c41aa9639a7814b7476b7a7485ec84497a9494 (2026-11-02), Core 0.9.6. The pinned revision above remains unchanged; no upstream updates were merged. New OpenRevoEngine/openrevo-ffi SDK is not integrated. See ../../evidence/win-software-lock-20261104/REPORT.md.
+
+2026-11-04 REQ-CORE-SYNC-01 selective backport (supersedes the check-only status above):
+- Original base remains 72e98685b2c0538fa0a58409a6bcce9e7b6336f7 / Core 0.9.5. Selected source endpoint is 33c41aa9639a7814b7476b7a7485ec84497a9494; this is not a full upgrade to Core 0.9.6.
+- Config commit 2414fdc: system/config.rs persistence/merge section and new system/config_io.rs production helpers, registered in system/mod.rs. Keep local AppConfig fields/defaults, paths, profiles, existing tests and C# preference persistence. Omit Engine-only reset_config_cache. Native lighting.json now uses the same atomic writer and reports acknowledged hardware commands separately from persistence failure.
+- 146ca47bbc4d252527a5eb42e0d7c73f7ee8cc97 power/mod.rs System32-only DLL loading and release handling; extend the same lifecycle fix to CallNtPowerInformation. Preserve Native overlay mode mapping and existing power-policy ABI. Enable the existing windows crate LibraryLoader feature only. Align the C# mode-4 readback expectation with the existing Rust Balanced mapping; do not change the applied overlay.
+- d92bf47589a85062fddf94e28fc75ab04da1836d: append only the GM5HG7A / ProjectID 25 model definition to resources/builtin_models.json. No factory fan tables are supplied, and no write admission is expanded.
+- 7e3b7e9 / upstream PR #153: retain the local aligned PStates20 buffers, P0/domain/range parser and bridge compare/readback protections. Backport ignoring unrelated clock domains; add checked MHz-to-kHz conversion.
+- 146ca47 / edeb96d: Native already has read-only EC power queries and masked writes with admission/readback checks. Close its compare-to-write race inside the existing ACPI RMW lock. Do not import restore_ec_power_options, new EC addresses or startup/wake writes.
+- Keep REQ-134 adapters, REQ-135 software Win lock and approved panel handoff. Engine/official FFI, new performance modes/default OC, Tauri hooks/streamer, watchers, register-only renames and other files remain deferred. See ../../evidence/core-selective-sync-20261104/REPORT.md for the per-file disposition, source snapshots, build receipts and unverified behavior.

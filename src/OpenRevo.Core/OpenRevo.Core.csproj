@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Gm7tg0mDiagnostics)'=='true'">
+    <DefineConstants>$(DefineConstants);GM7TG0M_DIAGNOSTICS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(Gm7tg0mDiagnostics)'!='true'">
+    <Compile Remove="OemFanSnapshotCommand.cs" />
+  </ItemGroup>
+</Project>

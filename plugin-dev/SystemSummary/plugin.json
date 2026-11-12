@@ -1,0 +1,10 @@
+{
+  "apiMajor": 1,
+  "id": "sample-system-summary",
+  "name": "系统状态示例",
+  "version": "1.0.0",
+  "entryAssembly": "SystemSummary.dll",
+  "entryType": "OpenRevo.SamplePlugins.SystemSummaryPlugin",
+  "permissions": ["state.summary.read", "state.power.read", "config.own", "ui.view", "ui.navigate", "lifecycle.background"],
+  "background": true
+}
