@@ -23,12 +23,27 @@ pub fn power_state()->Value {
         "recovery":if valid{ec::wmi_read_ec(ec::ADDR_AC_RECOVERY)}else{None}})
 }
 pub fn lighting_state()->Value {
-    let mgr=lighting();let contract=mgr.active_contract();
-    json!({"capability_known":ec::wmi_read_ec(ec::ADDR_PROJECT_ID)==Some(16),"ec_front":IteLightingManager::is_ec_lightbar_supported(),"front":contract.has_coastline&&mgr.has_base_lightbar_device(),
-        "hinge":contract.has_air_vent&&mgr.has_hinge_device(),
-        "logo":contract.has_logo&&(IteLightingManager::probe_usb_logo_supported()||IteLightingManager::is_ec_logo_supported()),
-        "ec_logo":contract.has_logo&&IteLightingManager::is_ec_logo_supported()&&!IteLightingManager::probe_usb_logo_supported(),
-        "saved":lighting_saved(),"source":"Core capability + last acknowledged command; hardware has no complete state readback"})
+    let mgr = lighting();
+    let contract = mgr.active_contract();
+    let capability_known = ec::wmi_read_ec(ec::ADDR_PROJECT_ID) == Some(16);
+    let ec_front = IteLightingManager::is_ec_lightbar_supported();
+    let front = contract.has_coastline && mgr.has_base_lightbar_device();
+    let hinge = contract.has_air_vent && mgr.has_hinge_device();
+    let (usb_logo, ec_logo) = if contract.has_logo {
+        IteLightingManager::probe_logo_support()
+    } else {
+        (false, false)
+    };
+    json!({
+        "capability_known": capability_known,
+        "ec_front": ec_front,
+        "front": front,
+        "hinge": hinge,
+        "logo": usb_logo || ec_logo,
+        "ec_logo": ec_logo,
+        "saved": lighting_saved(),
+        "source": "Core capability + last acknowledged command; hardware has no complete state readback"
+    })
 }
 fn target(v:&Value)->Result<String,String> {
     let name=v["device"].as_str().ok_or("缺少物理显示器")?;

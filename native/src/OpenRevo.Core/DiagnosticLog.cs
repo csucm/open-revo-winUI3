@@ -113,6 +113,20 @@ public static class DiagnosticLog
     private static DiagnosticJournal journal=new(null);
     private static readonly AsyncLocal<string?> correlation=new();
     public static DiagnosticJournal Current=>Volatile.Read(ref journal);
+    // The authenticated panel must not resolve or adopt a hardware/settings
+    // directory. Shared temporary diagnostics are included by Collect().
+    public static void StartPanelProcess()
+    {
+        string? directory=null;
+        try
+        {
+            directory=Path.Combine(Path.GetTempPath(),"OpenRevoNative","diagnostics","runtime");
+            Directory.CreateDirectory(directory);
+        }
+        catch { directory=null; }
+        Interlocked.Exchange(ref journal,new(directory));
+        Record("process.started",new{mode="resident-panel",version=System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString()});
+    }
     public static void StartProcess(string mode,bool sharedTempFallback=true)
     {
         string? directory=null;string? failure=null;

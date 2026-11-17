@@ -2,13 +2,10 @@
 #define SetupId "{8626505B-AD8A-45AA-B1EB-8AB75B60524A}"
 #define UninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\" + SetupId + "_is1"
 #ifndef AppVersion
-#define AppVersion "0.7.0"
+#define AppVersion "0.7.1"
 #endif
 #ifndef AppPayloadDir
 #define AppPayloadDir "app-" + AppVersion + "-shared"
-#endif
-#ifndef SourceZipName
-#define SourceZipName "native-source-" + AppVersion + "-shared.zip"
 #endif
 #ifndef OutputName
 #define OutputName "Open-Revo-" + AppVersion + "-Shared-Setup-x64"
@@ -75,10 +72,9 @@ Source: "{#AppPayloadDir}\OpenRevo.Start.exe"; Flags: dontcopy
 Source: "{#AppPayloadDir}\OpenRevo.Start.dll"; Flags: dontcopy
 Source: "{#AppPayloadDir}\OpenRevo.Start.deps.json"; Flags: dontcopy
 Source: "{#AppPayloadDir}\OpenRevo.Start.runtimeconfig.json"; Flags: dontcopy
-Source: "{#AppPayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "plugins\*,diagnostics\*,layout-review\*,*.pdb,ui-review.json,ui-caption-steps.txt,caption-error.txt,overview-layout.json,overview-core-readings.json"
+Source: "{#AppPayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "plugins\*,diagnostics\*,layout-review\*,\source\*,native-source*.zip,*.pdb,ui-review.json,ui-caption-steps.txt,caption-error.txt,overview-layout.json,overview-core-readings.json"
 Source: "LICENSE"; DestDir: "{app}"
 Source: "INSTALL-NOTES.txt"; DestDir: "{app}"
-Source: "{#SourceZipName}"; DestDir: "{app}\source"; DestName: "native-source.zip"
 Source: "RELEASE-{#AppVersion}.md"; DestDir: "{app}"
 [Icons]
 Name: "{userprograms}\{#AppName}\{#AppName}"; Filename: "{app}\OpenRevo.Start.exe"; WorkingDir: "{app}"; IconFilename: "{app}\App.ico"; AppUserModelID: "OpenRevo.Native.ControlPanel"

@@ -32,7 +32,7 @@ public sealed partial class MainWindow
     private long residentWake;
     private readonly Dictionary<ResidentActionKey, int> residentPending = [];
     private bool residentDetaching, residentAllowClose, residentActivated, residentRenderQueued, residentPowerReading;
-    private bool residentGpuRead, residentLightingRead;
+    private bool residentGpuRead, residentLightingRead, residentFirstFrameReady;
     private bool PanelHardwareActive => residentClient != null ? residentSnapshot?.Active == true : hardware.Active;
     private int? PanelMode => residentClient != null ? residentSnapshot?.Mode : hardware.CurrentMode;
     private int? PanelBatteryLimit => residentClient != null ? residentSnapshot?.BatteryLimit : hardware.State?.Upper;
@@ -142,21 +142,35 @@ public sealed partial class MainWindow
     private bool CanAutoHideResident() => mini && systemPreferences.MiniAutoHide && !closed && !dialogOpen &&
         !residentDetaching && !panelShapeChanging && !panelMinimizeQueued && AppWindow.IsVisible;
 
-    private void InitializeResidentPresentation()
+    internal void PrepareResidentPresentation()
     {
+        // Activate shows the HWND. Build and size the selected view before that call.
+        var target = residentClient!.Attached.WakeTarget;
+        if (target is PanelWakeTarget.Settings or PanelWakeTarget.Updates)
+            PaintNavigate(target == PanelWakeTarget.Settings ? "settings" : "updates");
+        else
+            Render();
+        if (mini)
+            AppWindow.MoveAndResize(MiniPanelBounds());
+    }
+
+    private async Task InitializeResidentPresentationAsync()
+    {
+        if (mini) PositionMiniAtBottomRight();
         AlignCaption();
         root.XamlRoot.Changed += (_, _) =>
         {
             if (Math.Abs(root.XamlRoot.RasterizationScale - captionScale) > 0.001) AlignCaption();
         };
-        var target = residentClient!.Attached.WakeTarget;
-        if (target is PanelWakeTarget.Settings or PanelWakeTarget.Updates) RaiseResidentPanel(target);
-        else
-        {
-            Render();
-            if (customTuningOpen && !mini) _ = PaintReadTuning(automatic: true);
-        }
-        PrimeResidentReads();
+        await NextPanelFrame();
+        if (closed || residentDetaching) return;
+        residentFirstFrameReady = true;
+#if RESIDENT_PANEL_HOST
+        if (Application.Current is App app) app.RecordResidentPanelPhase("first-frame-ready");
+#endif
+        RefreshResidentReads(residentSnapshot, becameReady: true);
+        PublishResidentDemand();
+        SyncResidentPluginPage();
     }
 
     private void RaiseResidentPanel(PanelWakeTarget target)
@@ -177,6 +191,7 @@ public sealed partial class MainWindow
         }
         if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter)
             presenter.Restore();
+        if (mini && !panelShapeChanging) PositionMiniAtBottomRight();
         AppWindow.Show();
         Activate();
         SetForegroundWindow(captionWindow);
@@ -196,6 +211,7 @@ public sealed partial class MainWindow
 
     private async void PublishResidentDemand()
     {
+        if (!residentFirstFrameReady) return;
         PrimeResidentReads();
         if (residentClient == null || closed || residentDetaching || residentSendingDemand) return;
         residentSendingDemand = true;
@@ -298,7 +314,7 @@ public sealed partial class MainWindow
 
     private void QueueResidentSensors(PanelSensorPlan? plan)
     {
-        if (closed || residentDetaching) return;
+        if (!residentFirstFrameReady || closed || residentDetaching) return;
         if (plan == null || ResidentDemand() != plan.Demand)
         {
             if (residentSensors != null && lastQueuedSensorPlan is { } previous &&
@@ -392,15 +408,21 @@ public sealed partial class MainWindow
         UpdateThemeToggle();
         UpdateBrightnessValues();
         UpdateOverviewValues();
-        QueueResidentSensors(next.Details?.Sampling);
-        if (next.Ready && PaintRoute is "power" or "sleep" or "settings") _ = ReadResidentPowerAsync();
-        if (next.Ready && previous?.Ready != true && PaintRoute == "settings") _ = ReadResidentStartupAsync();
-        if (next.Ready && previous?.Ready != true && customTuningOpen && !mini) _ = PaintReadTuning(automatic: true);
-        if (!mini && PaintRoute is ("display" or "color")) _ = ReadResidentColorAsync();
-        if (!mini && PaintRoute is ("storage" or "diagnostics") && previous?.Ready != true)
-            _ = ReadResidentMaintenanceSettingsAsync();
+        RefreshResidentReads(next, becameReady: previous?.Ready != true);
         PublishResidentDemand();
         SyncResidentPluginPage();
+    }
+
+    private void RefreshResidentReads(PanelSnapshot? snapshot, bool becameReady)
+    {
+        if (!residentFirstFrameReady || closed || residentDetaching) return;
+        QueueResidentSensors(snapshot?.Details?.Sampling);
+        if (snapshot?.Ready != true || mini) return;
+        if (PaintRoute is "power" or "sleep" or "settings") _ = ReadResidentPowerAsync();
+        if (becameReady && PaintRoute == "settings") _ = ReadResidentStartupAsync();
+        if (becameReady && customTuningOpen) _ = PaintReadTuning(automatic: true);
+        if (PaintRoute is "display" or "color") _ = ReadResidentColorAsync();
+        if (becameReady && PaintRoute is "storage" or "diagnostics") _ = ReadResidentMaintenanceSettingsAsync();
     }
 
     private bool CanReadResidentRefresh() =>
@@ -537,7 +559,7 @@ public sealed partial class MainWindow
 
     private async Task ReadResidentPowerAsync(bool force = false)
     {
-        if (residentPowerReading || residentDetaching || closed || residentSnapshot?.Ready != true ||
+        if (!residentFirstFrameReady || residentPowerReading || residentDetaching || closed || residentSnapshot?.Ready != true ||
             !force && residentPower != null) return;
         residentPowerReading = true;
         try
@@ -572,10 +594,17 @@ public sealed partial class MainWindow
         }
         try
         {
-            if (track) RefreshPaintedState();
-            var result = await residentClient.SendAsync(operation, value, expected: expected, trialId: trial, desktop: desktop,
+            var pendingResult = residentClient.SendAsync(operation, value, expected: expected, trialId: trial, desktop: desktop,
                 preference: preference, layout: layout, osdAppearance: osdAppearance, icc: icc,
                 tuning: tuning, tuningImport: tuningImport, plugin: plugin, maintenance: maintenance, application: application);
+            if (track) RefreshPaintedState();
+            var result = await pendingResult;
+            if (track && operation == PanelOperation.SelectMode && !closed &&
+                result.Snapshot is { } modeSnapshot && (residentSnapshot == null || modeSnapshot.Revision > residentSnapshot.Revision))
+            {
+                residentPending.Remove(action);
+                track = false;
+            }
             if (!closed && result.Snapshot is { } snapshot) ApplyResidentSnapshot(snapshot);
             if (!closed && result.Desktop?.Lighting is { } lights)
                 ApplyResidentLighting(lights, desktop is PanelSetKeyboardRgb or PanelUndoKeyboardRgb);
@@ -604,6 +633,9 @@ public sealed partial class MainWindow
         var result = await SendResidentAsync(operation, value, expected, desktop: desktop);
         if (result.Outcome is PanelOutcome.Rejected or PanelOutcome.Busy or PanelOutcome.Unknown or PanelOutcome.ConfigurationSaveFailed)
             await ShowMessage("后台操作未完成", result.Message ?? "请刷新设备状态后重试。");
+        else if (result.Outcome == PanelOutcome.ReadbackConfirmed && result.Message is { Length: > 0 } message &&
+            operation is PanelOperation.Takeover or PanelOperation.SetBatteryLimit)
+            await ShowMessage("硬件操作已确认，保存存在提示", message);
     }
 
     private async Task SetResidentPreferenceAsync(PanelPreferenceRequest preference) =>

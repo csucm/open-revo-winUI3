@@ -23,7 +23,7 @@ public sealed partial class MainWindow
     }
     private TextBlock PT(Func<string> value,double size=14,bool bold=false,bool muted=false)
     {var text=Paint.Text(value(),size,bold,muted);paintBindings.Add(()=>{string next=value();if(text.Text!=next)text.Text=next;});return text;}
-    private PaintButton PB(string name,Func<Task> action,bool hardwareAction=false,bool createDefaultContent=true)
+    private PaintButton PB(string name,Func<Task> action,bool hardwareAction=false,bool createDefaultContent=true,bool refreshOnCompletion=true)
     {
         bool running = false;
         return new(name, async () =>
@@ -32,7 +32,7 @@ public sealed partial class MainWindow
             running = true;
             try { await action(); }
             catch (Exception error) { await ShowMessage("操作未完成", error.Message); }
-            finally { running = false; RefreshPaintedState(); }
+            finally { running = false; if (refreshOnCompletion) RefreshPaintedState(); }
         }, createDefaultContent);
     }
     private PaintButton PL(string name,Action action)
@@ -143,7 +143,7 @@ public sealed partial class MainWindow
             var foot=Paint.Between(Paint.Inline(5,Paint.Text("占用",12,muted:true),Live(id=="vram"?"overviewVramUsage":prefix+"Usage")),id=="vram"?PT(()=>OverviewMemoryNote,12,muted:true):Live(prefix+"Power"),8);
             var meter=new Border{Height=3,CornerRadius=new(2),Background=Paint.Brush(Paint.Line(root))};var fill=new Border{Height=3,CornerRadius=new(2),Background=Paint.Brush(Paint.Accent(root)),HorizontalAlignment=HorizontalAlignment.Left};meter.Child=fill;
             paintBindings.Add(()=>{double ratio=id=="cpu"?latest?.CpuPercent??0:id=="gpu"?CurrentOverviewGpu?.Usage??0:CurrentOverviewGpu?.DisplayMemoryPercent??0;fill.Width=Math.Max(0,meter.ActualWidth)*Math.Clamp(ratio/100,0,1);});
-            var content=Paint.Stack(8,head,value,foot,meter);
+            var details = Paint.Stack(8, head);
             if(id is "cpu" or "gpu")
             {
                 string Model()=>id=="cpu"?(string.IsNullOrWhiteSpace(identity.Processor)||identity.Processor=="未知"?"型号待读取":identity.Processor):
@@ -151,9 +151,16 @@ public sealed partial class MainWindow
                 var model=PT(Model,12,muted:true);model.TextWrapping=TextWrapping.NoWrap;model.TextTrimming=TextTrimming.CharacterEllipsis;
                 ToolTipService.SetToolTip(model,model.Text);
                 paintBindings.Add(()=>{if(ToolTipService.GetToolTip(model) as string!=model.Text)ToolTipService.SetToolTip(model,model.Text);});
-                content.Children.Insert(1,model);
+                details.Children.Add(model);
             }
-            return PaintMinHeight(Paint.StackCard(content),120);
+            var readings = Paint.Stack(8, value, foot, meter);
+            var content = new Grid { RowSpacing = 8 };
+            content.RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
+            content.RowDefinitions.Add(new() { Height = GridLength.Auto });
+            content.Children.Add(details);
+            Grid.SetRow(readings, 1);
+            content.Children.Add(readings);
+            return PaintMinHeight(Paint.Card(content), 120);
         }
         string icon=id=="performance"?"performance":id=="battery"?"battery":"display";var heading=Paint.Inline(8,Paint.Icon(icon,28,true,false),Paint.Text(tileTitles[id],16,true));
         if(id=="performance")
@@ -227,7 +234,9 @@ public sealed partial class MainWindow
             var performanceIcon = gpu ? null : new PerformanceModeIcon(icon, iconSize, compactIcon, PanelMode == mode);
             FrameworkElement image = performanceIcon ?? (FrameworkElement)Paint.Icon(icon, iconSize, false, compactIcon);
             var label=Paint.Text(name,12);label.TextWrapping=TextWrapping.NoWrap;label.LineHeight=15;label.TextAlignment=TextAlignment.Center;
-            var b=readOnly?new PaintButton(name,createDefaultContent:false):PB(name,()=>gpu?RunGpuRequest(mode):ApplySavedPerformance(mode),true,createDefaultContent:false);
+            var b = readOnly ? new PaintButton(name, createDefaultContent: false)
+                : PB(name, () => gpu ? RunGpuRequest(mode) : ApplySavedPerformance(mode), true,
+                    createDefaultContent: false, refreshOnCompletion: residentClient == null || gpu);
             var content = Paint.Stack(4, image, label);
             b.Content=content;b.Padding=new(3);b.Height=b.MinHeight=compact?56:68;b.HorizontalAlignment=HorizontalAlignment.Stretch;
             bool lastGpuSelected = false;

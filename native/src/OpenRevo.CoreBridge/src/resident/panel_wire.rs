@@ -69,8 +69,8 @@ pub fn snapshot(client: &Client) -> Value {
     let gpu = &state["Gpu"];
     json!({"Revision":number(&status["Revision"],0),"Ready":boolean(&state["Initialized"]),"Active":active,
         "Mode":if active{state["Mode"].clone()}else{Value::Null},"CanSelectMode":active&&boolean(&capabilities["performance"]),
-        "CanSetBatteryLimit":active&&boolean(&capabilities["battery"]),"CanToggleFanBoost":active&&boolean(&capabilities["fan_boost"]),
-        "BatteryLimit":if active{control["Upper"].clone()}else{Value::Null},
+        "CanSetBatteryLimit":active&&boolean(&state["BatteryWritable"]),"CanToggleFanBoost":active&&boolean(&capabilities["fan_boost"]),
+        "BatteryLimit":if active{state["BatteryLimit"].clone()}else{Value::Null},
         "FanBoost":if active{control["FanClamp"].as_u64().map(|v|v&64!=0)}else{None},"RequestedFanBoost":if active{state["RequestedFanBoost"].clone()}else{Value::Null},
         "KeepAwake":boolean(&state["KeepAwake"]),"WaitingForTakeover":boolean(&state["WaitingForTakeover"]),
         "Gpu":{"Fresh":boolean(&gpu["Fresh"]),"Declared":boolean(&gpu["Declared"]),"FirmwareMode":number(&gpu["FirmwareMode"],0),

@@ -33,24 +33,28 @@ foreach ($relative in $required) {
 $files = @(Get-ChildItem -LiteralPath $root -File -Recurse)
 foreach ($file in $files) {
     $relative = [IO.Path]::GetRelativePath($root, $file.FullName).Replace('\', '/')
-    if ($file.Name -match '^(OpenRevo\.Native\.(exe|dll|pri|.*\.json)|coreclr\.dll|hostfxr\.dll|hostpolicy\.dll|System\.Private\.CoreLib\.dll|.*WebView2.*\.dll)$' -or
+    if ($file.Name -match '^(OpenRevo\.Native\.(exe|dll|pri|.*\.json)|coreclr\.dll|hostfxr\.dll|hostpolicy\.dll|System\.Private\.CoreLib\.dll|.*WebView2.*\.dll|native-source.*\.zip)$' -or
         $relative -match '^panel-native/(PluginWorker/|openrevo_native_bridge\.dll$)' -or
-        ($relative -match '^OpenRevo\.PluginWorker\.') -or $relative -match '(^|/)(data|resident-data|resident-storage|plugins)/') {
+        ($NativeHost -and $relative -match '^(PluginWorker/)?(Microsoft\.Windows\.SDK\.NET|WinRT\.Runtime)\.dll$') -or
+        ($relative -match '^(OpenRevo\.PluginWorker\.|source/)') -or $relative -match '(^|/)(data|resident-data|resident-storage|plugins)/') {
         throw "Unexpected resident layout file: $relative"
     }
 }
 if ($NativeHost) {
     $exe = Join-Path $root $hostName
+    [xml]$identity = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../src/OpenRevo.Release.props') -Raw
+    $public = $identity.SelectSingleNode('//PublicReleaseVersion').InnerText
+    $internal = $identity.SelectSingleNode('//InternalBuildVersion').InnerText
     $bytes = [IO.File]::ReadAllBytes($exe)
     $pe = [BitConverter]::ToInt32($bytes, 0x3c)
     $optional = $pe + 24
     if ([BitConverter]::ToUInt16($bytes, $pe + 4) -ne 0x8664 -or [BitConverter]::ToUInt16($bytes, $optional) -ne 0x20b -or
         [BitConverter]::ToUInt64($bytes, $optional + 112 + 14*8) -ne 0) { throw 'Resident EXE is not native x64.' }
     $version = (Get-Item -LiteralPath $exe).VersionInfo
-    if ($version.ProductVersion -ne '0.7.0' -or $version.FileVersion -ne '1.0.6') { throw 'Native resident version is not 0.7.0 / 1.0.6.' }
+    if ($version.ProductVersion -ne $public -or $version.FileVersion -ne $internal) { throw "Native resident version is not $public / $internal." }
     foreach ($relative in @('OpenRevo.Start.exe','OpenRevo.Tools.exe','PluginWorker/OpenRevo.PluginWorker.exe',"panel-native/$panelName.exe")) {
         $pairedVersion=(Get-Item -LiteralPath (Join-Path $root $relative)).VersionInfo
-        if ($pairedVersion.ProductVersion -ne '0.7.0' -or $pairedVersion.FileVersion -ne '1.0.6.0') { throw "Paired version is inconsistent: $relative" }
+        if ($pairedVersion.ProductVersion -ne $public -or $pairedVersion.FileVersion -ne "$internal.0") { throw "Paired version is inconsistent: $relative" }
     }
     $panelVersion = (Get-Item -LiteralPath (Join-Path $panel "$panelName.exe")).VersionInfo
     if ($panelVersion.FileDescription -cne $panelName -or $panelVersion.ProductName -cne $panelName -or

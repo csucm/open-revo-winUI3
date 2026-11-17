@@ -763,11 +763,16 @@ impl IteLightingManager {
 
     /// Check if machine has motherboard EC-controlled A-Cover Logo
     pub fn is_ec_logo_supported() -> bool {
-        // Physical USB Lettering Logo hardware takes precedence
-        if Self::probe_usb_logo_supported() {
-            return false;
-        }
+        Self::probe_logo_support().1
+    }
 
+    pub(crate) fn probe_logo_support() -> (bool, bool) {
+        // Dedicated USB lettering has priority in the current routing policy.
+        let usb = Self::probe_usb_logo_supported();
+        (usb, !usb && Self::probe_ec_logo())
+    }
+
+    fn probe_ec_logo() -> bool {
         // SingleZone RGB or SingleColor keyboards physically wire registers 1897~1899 to keyboard backlighting PWM;
         // they NEVER have an independent EC Shield Logo (verified via official Tongfang NvramVariable.cs line 782).
         let raw_kb_support = crate::driver::wmi_ec::wmi_read_ec(ADDR_SUPPORT_BYTE2).unwrap_or(0);

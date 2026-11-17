@@ -1,11 +1,15 @@
 //! Classic tuning belongs to the same session and actor as factory commands.
-//! Pure draft validation precedes every write; an incomplete transaction retains
+//! Normal entry preserves the boost state; an incomplete transaction requests
 //! forced cooling and faults the session instead of continuing later writes.
 use super::{read, ControlState, HardwareSession, Outcome, PerformanceState, Receipt};
 use crate::native_admission as admission;
 use crate::resident::{
     gpu::{GpuState, Offsets},
     platform::{ac_online, OperationLock},
+};
+use openrevo_core::driver::wmi_ec::{
+    wmi_modify_ec, ADDR_CUSTOM_MODE, ADDR_CUSTOM_PL1, ADDR_CUSTOM_PL2, ADDR_CUSTOM_PL4,
+    ADDR_FAN_BOOST_CLAMP, FAN_BOOST_CLAMP_BIT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -179,6 +183,12 @@ fn encode_temperature(amd: bool, tj_max: i32, enabled: bool, target: i32, factor
         (tj_max - 95).max(5)
     }) as u8
 }
+const TUNING_CLAMP_MASK: u8 = 0xb0;
+
+fn valid_live_cpu_limits([pl1, pl2, pl4]: [u8; 3]) -> bool {
+    pl1 >= 15 && pl1 <= pl2 && u16::from(pl4) >= u16::from(pl2) + 20
+}
+
 fn tuning_fans(current: &PerformanceState, p: &TuningProfile) -> Result<PerformanceState, String> {
     let mut target = current.factory(3)?;
     if p.custom_fans {
@@ -348,6 +358,11 @@ impl HardwareSession {
                 });
             }
             before.validate(&profile, false)?;
+            if before.cpu_tuning
+                && !valid_live_cpu_limits([before.registers[0], before.registers[1], before.registers[2]])
+            {
+                return Err("当前 CPU 功耗组合未确认，未进入极客档".into());
+            }
             self.check_tuning_power()?;
             let mut target = tuning_fans(&before.performance, &profile)?;
             if !target.recognized(false) {
@@ -355,7 +370,7 @@ impl HardwareSession {
             }
             let caps = &before.gpu.capabilities;
             let old = &before.performance;
-            target.clamp = (old.clamp & !176)
+            target.clamp = (old.clamp & !TUNING_CLAMP_MASK)
                 | if caps.supported {
                     if profile.gpu_super_performance {
                         16
@@ -378,16 +393,19 @@ impl HardwareSession {
             self.controls(
                 root.project,
                 &[
-                    (1873, old.clamp | 64, 0),
-                    (1798, old.custom & !1, 0),
                     (1990, 4, 0),
                     (1990, 0, 0),
                     (1857, target.ap, 0),
+                    (ADDR_CUSTOM_MODE, target.custom, 0),
                 ],
             )?;
-            self.guard()?;
-            admission::apply_classic_transaction(
-                json!({"kind":"fan_tables","project":root.project,"factory":false,"values":target.tables}),
+            self.check_tuning_power()?;
+            let boost_enabled = old.clamp & FAN_BOOST_CLAMP_BIT != 0;
+            admission::write_staged_custom_fan_table(
+                root.project,
+                &target.tables,
+                target.custom,
+                boost_enabled,
             )?;
             self.check_tuning_power()?;
             let mut steps = Vec::new();
@@ -400,12 +418,26 @@ impl HardwareSession {
                     profile.temperature_c,
                     before.registers[11],
                 );
-                steps.extend([
-                    (1923, profile.pl1 as u8, 0),
-                    (1924, profile.pl2 as u8, 0),
-                    (1925, profile.pl4 as u8, 0),
-                    (1926, tcc, 0),
-                ]);
+                // The mode flag is now set. Keep every intermediate limit
+                // combination valid if the firmware applies writes immediately.
+                let current = [
+                    read(ADDR_CUSTOM_PL1)?,
+                    read(ADDR_CUSTOM_PL2)?,
+                    read(ADDR_CUSTOM_PL4)?,
+                ];
+                if !valid_live_cpu_limits(current) {
+                    return Err("切入极客档后 CPU 功耗组合未确认".into());
+                }
+                let mut limits = [
+                    (ADDR_CUSTOM_PL1, profile.pl1 as u8, 0),
+                    (ADDR_CUSTOM_PL2, profile.pl2 as u8, 0),
+                    (ADDR_CUSTOM_PL4, profile.pl4 as u8, 0),
+                ];
+                if profile.pl2 > i32::from(current[1]) {
+                    limits.reverse();
+                }
+                steps.extend(limits);
+                steps.push((1926, tcc, 0));
             }
             let boost = if profile.gpu_super_performance {
                 caps.boost_max_watts
@@ -442,9 +474,7 @@ impl HardwareSession {
                 (1963, target.index, 0),
                 (1115, target.silent, 1),
                 (1895, target.trigger, 40),
-                (1798, target.custom, 0),
                 (1990, target.latch, 0),
-                (1873, target.clamp | 64, 0),
             ]);
             self.controls(root.project, &steps)?;
             if caps.supported && profile.offsets != before.gpu.offsets {
@@ -462,7 +492,18 @@ impl HardwareSession {
                 }
             }
             self.check_tuning_power()?;
-            self.controls(root.project, &[(1873, target.clamp, 0)])?;
+            // Preserve the boost state and every bit outside the tuning mask.
+            if wmi_modify_ec(ADDR_FAN_BOOST_CLAMP, |current| {
+                if (current ^ target.clamp) & !TUNING_CLAMP_MASK == 0 {
+                    target.clamp
+                } else {
+                    current
+                }
+            }) != Some(target.clamp)
+                || read(ADDR_FAN_BOOST_CLAMP)? != target.clamp
+            {
+                return Err("极客档夹紧位或强冷状态未确认".into());
+            }
             let after = self.read_tuning()?;
             let r = &after.registers;
             if !target.matches(&after.performance)
@@ -498,12 +539,14 @@ impl HardwareSession {
             // identity and environment remain admitted; never continue the draft.
             let mut cooling = false;
             if self.guard().is_ok() {
-                if let Ok(current) = read(1873) {
-                    let desired = current | 64;
-                    cooling =
-                        admission::or_native_ec_write(1873, u32::from(current), u32::from(desired))
-                            == 0
-                            && read(1873) == Ok(desired);
+                if let Ok(current) = read(ADDR_FAN_BOOST_CLAMP) {
+                    let desired = current | FAN_BOOST_CLAMP_BIT;
+                    cooling = admission::or_native_ec_write(
+                        u32::from(ADDR_FAN_BOOST_CLAMP),
+                        u32::from(current),
+                        u32::from(desired),
+                    ) == 0
+                        && read(ADDR_FAN_BOOST_CLAMP) == Ok(desired);
                 }
             }
             let _ = self.audit("custom-tuning-stopped", json!({"coolingConfirmed":cooling}));

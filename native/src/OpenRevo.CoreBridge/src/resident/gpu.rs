@@ -198,6 +198,24 @@ impl GpuState {
         }
     }
 }
+
+pub(super) fn factory_offsets(leaving_custom: bool) -> Result<Option<(i32, i32)>, String> {
+    let offsets = nvapi::get_gpu_clock_offsets();
+    if offsets == Some((0, 0)) || (offsets.is_none() && !leaving_custom) {
+        return Ok(None);
+    }
+    // Only a possible reset or an unreadable custom state needs the model gate.
+    let capabilities = Capabilities::probe();
+    if !capabilities.supported
+        || nvapi::get_gpu_full_name().as_deref() != Some(capabilities.name.as_str())
+    {
+        return Ok(None);
+    }
+    offsets
+        .map(Some)
+        .ok_or_else(|| "无法确认显卡超频状态，请先重新读取".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

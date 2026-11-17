@@ -23,7 +23,7 @@ impl Shared {
     pub fn new(installed: bool, changed: Arc<dyn Fn() + Send + Sync>) -> Self {
         Self {
             state: Mutex::new(
-                json!({"CurrentVersion":"0.7.0","CanInstall":installed,"Phase":0,"AvailableVersion":null,"Size":null,"Percent":null,"Message":null}),
+                json!({"CurrentVersion":env!("OPENREVO_PUBLIC_VERSION"),"CanInstall":installed,"Phase":0,"AvailableVersion":null,"Size":null,"Percent":null,"Message":null}),
             ),
             release: Mutex::new(Value::Null),
             download: Mutex::new(Value::Null),

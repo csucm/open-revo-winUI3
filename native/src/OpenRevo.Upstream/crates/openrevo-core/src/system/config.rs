@@ -236,9 +236,8 @@ fn default_module_toggles() -> std::collections::HashMap<String, bool> {
     map.insert("gpu".to_string(), true);
     map.insert("tuning".to_string(), true);
     map.insert("lighting".to_string(), true);
-    let has_water_cooler = crate::driver::wmi_ec::get_hardware_support_flags().has_water_cooler
-        || crate::driver::ble_cooler::find_paired_water_cooler_mac().is_some();
-    map.insert("water".to_string(), has_water_cooler);
+    // Resolve water cooling on demand. Config deserialization and defaults
+    // run under the config lock and must not probe EC or Bluetooth here.
     map.insert("system".to_string(), true);
     map.insert("plugins".to_string(), true);
     map.insert("sponsor".to_string(), true);
@@ -1339,37 +1338,26 @@ pub fn save_config(cfg: &AppConfig) {
 /// 2. If Windows already has a paired water cooler, naturally self-heals and enables
 /// 3. If unset/default, defaults to physical hardware detection (`has_water_cooler`)
 pub fn is_water_cooler_enabled() -> bool {
-    let cfg = load_config();
-    // 1. Explicit legacy config field preference if present
+    water_cooler_enabled(&load_config())
+}
+
+fn water_cooler_enabled(cfg: &AppConfig) -> bool {
     if let Some(user_pref) = cfg.water_cooler_enabled {
         return user_pref;
     }
-    // 2. Explicit module toggle from plugin management
-    if let Some(&enabled) = cfg.module_toggles.get("water") {
-        if enabled {
-            return true;
-        }
-        // If toggle was default-initialized to false, but a paired cooler is present in Windows PnP, self-heal
-        if crate::driver::ble_cooler::find_paired_water_cooler_mac().is_some()
-            || (!cfg.cooler_mac.trim().is_empty() && cfg.cooler_mac != "0")
-        {
-            return true;
-        }
-        return false;
-    }
-    // 3. Paired device priority: if Windows already has a paired cooler or stored MAC, naturally enabled
-    if crate::driver::ble_cooler::find_paired_water_cooler_mac().is_some()
+    let saved = cfg.module_toggles.get("water").copied();
+    saved.unwrap_or_else(crate::driver::wmi_ec::has_native_water_cooler)
         || (!cfg.cooler_mac.trim().is_empty() && cfg.cooler_mac != "0")
-    {
-        return true;
-    }
-    // 4. First-run default: enabled if machine natively has liquid cooling, false otherwise
-    crate::driver::wmi_ec::get_hardware_support_flags().has_water_cooler
+        || crate::driver::ble_cooler::find_paired_water_cooler_mac().is_some()
 }
 
 /// Retrieve the map of all module toggles from config.json
 pub fn get_module_toggles() -> std::collections::HashMap<String, bool> {
-    let cfg = load_config();
+    let mut cfg = load_config();
+    if !cfg.module_toggles.contains_key("water") {
+        let water = water_cooler_enabled(&cfg);
+        cfg.module_toggles.insert("water".to_string(), water);
+    }
     cfg.module_toggles
 }
 
@@ -1400,7 +1388,7 @@ pub fn set_module_enabled(id: &str, enabled: bool) -> bool {
 pub fn is_module_enabled(id: &str) -> bool {
     let cfg = load_config();
     if id == "water" {
-        return is_water_cooler_enabled();
+        return water_cooler_enabled(&cfg);
     }
     cfg.module_toggles.get(id).copied().unwrap_or(true)
 }

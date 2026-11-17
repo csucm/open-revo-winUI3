@@ -20,9 +20,12 @@ static CACHED_MANIFEST: std::sync::OnceLock<Option<ModelManifest>> = std::sync::
 /// Checks external `%APPDATA%\OpenRevo\plugins\drivers\` first, then falls back to built-in drivers.
 /// The result is cached statically to prevent repetitive disk/registry queries and log spamming.
 pub fn load_matched_manifest() -> Option<ModelManifest> {
-    CACHED_MANIFEST
-        .get_or_init(|| load_matched_manifest_internal())
-        .clone()
+    matched_manifest().cloned()
+}
+
+/// Read the detected device contract without cloning its actions and channels.
+pub fn matched_manifest() -> Option<&'static ModelManifest> {
+    CACHED_MANIFEST.get_or_init(load_matched_manifest_internal).as_ref()
 }
 
 fn load_matched_manifest_internal() -> Option<ModelManifest> {

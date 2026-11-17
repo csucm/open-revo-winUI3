@@ -30,6 +30,7 @@ public sealed partial class MainWindow : Window
     private PerformanceCommandService performance => hardwareRuntime.Performance;
     private DeviceCommandService devices => hardwareRuntime.Devices;
     private readonly PaintNavigation navigation = new();
+    private bool navigationBuilt;
     private readonly ScrollViewer scroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly StackPanel page = new() { Spacing = 18, Padding = new Thickness(32, 24, 32, 32), MaxWidth = 1120, HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly Dictionary<string, TextBlock> live = new();
@@ -81,6 +82,13 @@ public sealed partial class MainWindow : Window
             systemPreferences = new();
             InitializeResidentState(client!);
         }
+        bool initialMini = client?.Attached.WakeTarget switch
+        {
+            PanelWakeTarget.Mini => true,
+            PanelWakeTarget.Full or PanelWakeTarget.Settings or PanelWakeTarget.Updates => false,
+            _ => client?.Attached.Draft?.Compact ??
+                (systemPreferences.WakeMode=="mini"||systemPreferences.WakeMode=="remember"&&systemPreferences.LastMini)&&!reviewDetails
+        };
 #if NATIVE_RESIDENT_CORE
         Title = "Open Revo";
 #else
@@ -135,7 +143,7 @@ public sealed partial class MainWindow : Window
         drag.SizeChanged += (_, _) => UpdateMiniCaptionRegions();
         captionActions.SizeChanged += (_, _) => UpdateMiniCaptionRegions();
         AttachCaptionModeCommand();
-        ResizeLogical(1180, 850);
+        if (client == null || !initialMini) ResizeLogical(1180, 850);
         var icon = Path.Combine(AppContext.BaseDirectory, "App.ico");
         if (File.Exists(icon)) { AppWindow.SetIcon(icon); windowBrandIcon = new(captionWindow, icon); }
         navigation.PaneDisplayMode = NavigationViewPaneDisplayMode.Left;
@@ -155,7 +163,7 @@ public sealed partial class MainWindow : Window
         scroll.SizeChanged += (_,_) => QueueDesktopViewport();
         navigation.SelectionChanged += (_, e) => { if (!syncingNavigation && e.SelectedItem is PaintNavItem item && item.Tag is string id) PaintNavigate(id); };
         Grid.SetRow(navigation, 1); root.Children.Add(navigation);
-        navigation.Build();
+        if (client == null || !initialMini) BuildDesktopNavigation();
         if (residentClient == null) navigation.SelectedItem = navigation.MenuItems[0];
         timer = DispatcherQueue.CreateTimer(); timer.Interval = TimeSpan.FromSeconds(interval);
         timer.Tick += (_, _) => Tick();
@@ -189,7 +197,7 @@ public sealed partial class MainWindow : Window
         root.Loaded += async (_, _) =>
         {
             if (initialized) return; initialized = true;
-            if (residentClient != null) { InitializeResidentPresentation(); return; }
+            if (residentClient != null) { await InitializeResidentPresentationAsync(); return; }
             if(Environment.GetCommandLineArgs().Contains("--painted-ui-review")){await RunPaintedUiReview();Close();return;}
             if(Environment.GetCommandLineArgs().Contains("--approved-ui-review")){await RunApprovedUiReview();Close();return;}
             if(App.IsPanelShapeReview){await RunPanelShapeReview();return;}
@@ -213,14 +221,21 @@ public sealed partial class MainWindow : Window
             if(uiChecks){if(App.IsAdmissionReview)await RunAdmissionReview();else if(App.IsCapsUiReview)await RunCapsUiReview();else if(App.IsOsdPowerReview)await RunOsdPowerReview();else if(App.IsDesignReview)await RunDesignReview();else if(Environment.GetCommandLineArgs().Any(a=>a is "--ui-settings-checks" or "--ui-theme-restore-checks"))await RunSettingsTrayReview();else if(Environment.GetCommandLineArgs().Contains("--ui-replica-checks"))await RunReplicaLayoutReview();else if(Environment.GetCommandLineArgs().Contains("--ui-window-checks"))await RunWindowFixChecks();else await RunUiReviewChecks();Close();return;}
             ObserveHardwareOsd();StartCapsLockMonitor();UpdatePolling(); StartPowerPolicy(); await CheckAutomaticRefresh(true);await InitializeDesktopServicesRuntime();
         };
-        bool initialMini = client?.Attached.WakeTarget switch
+        if (initialMini && client != null)
         {
-            PanelWakeTarget.Mini => true,
-            PanelWakeTarget.Full or PanelWakeTarget.Settings or PanelWakeTarget.Updates => false,
-            _ => client?.Attached.Draft?.Compact ??
-                (systemPreferences.WakeMode=="mini"||systemPreferences.WakeMode=="remember"&&systemPreferences.LastMini)&&!reviewDetails
-        };
-        if (initialMini) ToggleMini(); else UpdatePanelToggle();
+            var size = LogicalWindowSize(1180, 850);
+            normalBounds = new(AppWindow.Position.X, AppWindow.Position.Y, size.Width, size.Height);
+            panelGoalMini = true;
+            ConfigurePanelMode(true, render: false);
+        }
+        else if (initialMini) ToggleMini();
+        else UpdatePanelToggle();
+    }
+    private void BuildDesktopNavigation()
+    {
+        if (navigationBuilt) return;
+        navigation.Build();
+        navigationBuilt = true;
     }
     private void AddNavigation(string title,string id,Symbol unused)
     {
@@ -304,6 +319,7 @@ public sealed partial class MainWindow : Window
     }
     private void Render()
     {
+        if (!mini) BuildDesktopNavigation();
         captureResidentDeclaredDraft=null;
         NativePluginThemePalette.RegisterRoot(root,mini?"mini":"main");
         if (residentClient == null && (currentPage != "plugins" || mini)) StopForegroundFolderPlugins();
@@ -361,9 +377,11 @@ public sealed partial class MainWindow : Window
     private RectInt32 MiniPanelBounds()
     {
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
-        double scale=GetDpiForWindow(captionWindow)/96d;if(scale<=0)scale=1;
-        int margin=(int)Math.Round(MiniEdgeMarginDip*scale),width=Math.Min((int)(400*scale),Math.Max(1,area.Width-40)),height=Math.Min((int)(PaintMiniHeight(width/scale)*scale),Math.Max(1,area.Height-40));
-        return new(area.X+Math.Max(0,area.Width-width-margin),area.Y+Math.Max(0,area.Height-height-margin),width,height);
+        double scale = MiniPlacementScale();
+        int width = Math.Min((int)(400 * scale), Math.Max(1, area.Width - 40));
+        int height = Math.Min((int)(PaintMiniHeight(width / scale) * scale), Math.Max(1, area.Height - 40));
+        var corner = MiniCorner(area, new(width, height), scale);
+        return new(corner.X, corner.Y, width, height);
     }
     private async Task<bool> Confirm(string title, string message)
     {
@@ -394,14 +412,16 @@ public sealed partial class MainWindow : Window
         try {AppData.Update(previous=>previous with{Theme=themeChanged?selectedTheme:previous.Theme,SampleSeconds=interval,LowRefreshOnBattery=lowRefreshOnBattery,OsdEnabled=osdEnabled});}
         catch (Exception e) { await ShowMessage("设置未保存", e.Message); }
     }
-    private void ResizeLogical(int width, int height)
+    private void ResizeLogical(int width, int height) => AppWindow.Resize(LogicalWindowSize(width, height));
+
+    private SizeInt32 LogicalWindowSize(int width, int height)
     {
         double scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96d;
         if (scale <= 0) scale = 1;
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         int targetWidth=Math.Min((int)(width*scale),Math.Max(1,area.Width-40)),targetHeight=Math.Min((int)(height*scale),Math.Max(1,area.Height-40));
         if(!mini){var minimum=MinimumDesktopPixels();targetWidth=Math.Max(targetWidth,minimum.Width);targetHeight=Math.Max(targetHeight,minimum.Height);}
-        AppWindow.Resize(new(targetWidth,targetHeight));
+        return new(targetWidth,targetHeight);
     }
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
 }

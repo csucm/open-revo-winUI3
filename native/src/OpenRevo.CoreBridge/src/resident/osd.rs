@@ -299,9 +299,10 @@ impl Osd {
                 return Err("屏幕提示工作区无效".into());
             }
             let position = settings["Position"].as_str().unwrap_or("top-left");
-            let margin = (4.0 * dpi).round_ties_even() as i32;
+            let inset_x = (area.right - area.left) * 8 / 100;
+            let inset_y = (area.bottom - area.top) * 12 / 100;
             let x = if position == "top-left" {
-                (area.left + margin).min(area.right - width)
+                (area.left + inset_x).min(area.right - width)
             } else {
                 area.left + (area.right - area.left - width) / 2
             };
@@ -310,7 +311,7 @@ impl Osd {
                 "bottom-center" => area
                     .top
                     .max(area.bottom - height - (24.0 * dpi).round_ties_even() as i32),
-                _ => (area.top + margin).min(area.bottom - height),
+                _ => (area.top + inset_y).min(area.bottom - height),
             };
             state.bounds = RECT {
                 left: 2 * state.padding + state.badge,

@@ -128,6 +128,11 @@ pub trait HardwareDriver: MechrevoHardwareHAL + Send + Sync {
     /// Read CPU package temperature in Celsius
     fn read_cpu_temp(&self) -> Result<u8, HalError>;
 
+    /// Stage the CPU limits through the active driver's hardware contract.
+    fn set_cpu_profile(&self, _pl1: u32, _pl2: u32, _temperature: Option<u32>) -> Result<(), HalError> {
+        Err(HalError::UnsupportedModel("CPU profile not supported on this driver".into()))
+    }
+
     /// Read active GPU MUX switch mode ("hybrid" / "dgpu" / "igpu")
     fn get_gpu_mux(&self) -> Result<String, HalError> {
         Err(HalError::UnsupportedModel("GPU MUX reading not implemented on this driver".into()))

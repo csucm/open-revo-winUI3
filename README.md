@@ -1,18 +1,14 @@
 # OpenRevo
 
-**0.7.0** · Windows x64 · WinUI 3
+**0.7.1** · Windows x64 · WinUI 3
 
-[下载 x64 安装包](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0.0/Open-Revo-0.7.0-Setup-x64.exe) · [对应源码](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.0.0/Open-Revo-0.7.0-Source.zip) · [更新日志](docs/releases/0.7.0.md) · [GitHub 发布页](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.7.0.0) · [English](README_en.md)
+[下载 x64 安装包](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.1/Open-Revo-0.7.1-Setup-x64.exe) · [对应源码](https://github.com/csucm/open-revo-winUI3/releases/download/native-v0.7.1/Open-Revo-0.7.1-Source.zip) · [更新日志](docs/releases/0.7.1.md) · [GitHub 发布页](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.7.1) · [English](README_en.md)
 
 OpenRevo 用于管理兼容设备的性能档位、充电上限、屏幕和键盘灯光。可用功能取决于机型和驱动。
 
-**开机自启热修复**。修复登录时任务栏尚未就绪导致的自启弹窗和后台退出。登录自启延后 3 秒，手动打开仍即时启动。已安装 0.7.0 的用户可在软件内检查更新。
+## 0.7.1 的主要变化
 
-## 0.7.0 的主要变化
-
-本版重构常驻内核，重点降低藏盘后的内存占用。关闭窗口后，WinUI 面板退出，原生后台继续执行已启用的硬件和电源策略。早期本机测试中，冷启动且未开面板时，后台曾低于 **5 MB**。开过面板再藏盘，偶尔仍会停留在约 **20 MB**，可用内存清理工具临时缓解，计划下一版修复。
-
-本版还修复了部分机型重启后性能档位丢失的问题，并改善亮度确认、键盘灯光、托盘温度和 GPU 功耗读数。详情见 [0.7.0 更新日志](docs/releases/0.7.0.md)。
+限充读取异常时，其他硬件功能仍可独立通过检查并接管。检测到已知的阈值清零状态时，后台可恢复同一设备上已回读确认的限充目标。改善藏盘后的面板唤起，并减少切换性能档位时的重复探测。详见 [0.7.1 更新日志](docs/releases/0.7.1.md)。
 
 ## 安装与升级
 

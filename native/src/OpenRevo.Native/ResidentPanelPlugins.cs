@@ -206,7 +206,7 @@ public sealed partial class MainWindow
 
     private async void SyncResidentPluginPage()
     {
-        if (residentClient == null) return;
+        if (residentClient == null || !residentFirstFrameReady) return;
         if (mini || PaintRoute != "plugins")
         {
             residentPluginCards = null;

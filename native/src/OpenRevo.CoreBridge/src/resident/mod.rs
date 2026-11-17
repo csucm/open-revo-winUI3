@@ -3,6 +3,7 @@
 //! on complete protocol/function pairing; see evidence/rc-031-native-runtime.
 mod hardware;
 mod platform;
+pub(crate) use platform::{gm6iq0c_battery_identity, gm7tg0m_identity};
 mod policy;
 mod queue;
 pub mod runtime;

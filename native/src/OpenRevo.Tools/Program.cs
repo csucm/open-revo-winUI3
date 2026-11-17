@@ -1,6 +1,7 @@
 // Short-lived installed file/update tools. Never constructs a hardware runtime or sensor reader.
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -11,6 +12,8 @@ using OpenRevo.Core;
 using OpenRevo.ResidentProtocol;
 internal static class Program
 {
+    private static readonly string PublicReleaseVersion = typeof(Program).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+        .Single(value => value.Key == "PublicReleaseVersion").Value ?? throw new InvalidOperationException("缺少公开发布版本。");
     private static readonly JsonSerializerOptions Json = new() { MaxDepth = 32, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, AllowDuplicateProperties = false, RespectRequiredConstructorParameters = true };
     private sealed record Request(string Operation, JsonElement Payload);
     private static readonly SemaphoreSlim writes = new(1,1);
@@ -74,12 +77,12 @@ internal static class Program
             }
             if(request.Operation=="update-directory")
             {await Write(new { Done=true,Outcome=1,Application=new PanelApplicationReply(Directory:StartupRegistration.PrepareResidentUpdateCache(installation)) });return 0;}
-            var current=ReleaseUpdater.InstalledUpdateVersion(new Version("0.7.0"));
+            var current=ReleaseUpdater.InstalledUpdateVersion(new Version(PublicReleaseVersion));
             if(request.Operation=="update-check")
             {
                 using var http=new HttpClient{Timeout=TimeSpan.FromSeconds(20)};
                 var release=await new ReleaseUpdater(http).CheckAsync(current);
-                await Write(new { Done=true,Release=release,Update=new PanelUpdateSnapshot("0.7.0",true,release==null?PanelUpdatePhase.Current:PanelUpdatePhase.Available,release?.Version.ToString(3),release?.Size) });return 0;
+                await Write(new { Done=true,Release=release,Update=new PanelUpdateSnapshot(PublicReleaseVersion,true,release==null?PanelUpdatePhase.Current:PanelUpdatePhase.Available,release?.Version.ToString(3),release?.Size) });return 0;
             }
             if(request.Operation=="update-download")
             {
@@ -89,7 +92,7 @@ internal static class Program
                 using var http=new HttpClient{Timeout=TimeSpan.FromMinutes(20)};
                 var progress=new Progress(release);
                 var download=await new ReleaseUpdater(http).DownloadAsync(release,cache,progress);
-                await Write(new { Done=true,Download=download,Update=new PanelUpdateSnapshot("0.7.0",true,PanelUpdatePhase.Verified,release.Version.ToString(3),release.Size,100) });return 0;
+                await Write(new { Done=true,Download=download,Update=new PanelUpdateSnapshot(PublicReleaseVersion,true,PanelUpdatePhase.Verified,release.Version.ToString(3),release.Size,100) });return 0;
             }
             if(request.Operation=="update-install")
             {
@@ -119,7 +122,7 @@ internal static class Program
         public void Report(double value)
         {
             int percent=Math.Clamp((int)(value*100),0,99);if(percent<=latest)return;latest=percent;
-            Write(new { Update=new PanelUpdateSnapshot("0.7.0",true,PanelUpdatePhase.Downloading,release.Version.ToString(3),release.Size,percent) }).GetAwaiter().GetResult();
+            Write(new { Update=new PanelUpdateSnapshot(PublicReleaseVersion,true,PanelUpdatePhase.Downloading,release.Version.ToString(3),release.Size,percent) }).GetAwaiter().GetResult();
         }
     }
     private static async Task<Request> Read(Stream input)

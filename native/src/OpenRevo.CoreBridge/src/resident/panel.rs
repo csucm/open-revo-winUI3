@@ -24,7 +24,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use windows::{
     core::PCWSTR,
@@ -90,6 +90,8 @@ struct Child {
     updates: SyncSender<()>,
     reader: JoinHandle<()>,
     watcher: JoinHandle<()>,
+    resources: Arc<PanelResources>,
+    cleaned: Arc<AtomicBool>,
 }
 pub struct Controller {
     base: PathBuf,
@@ -112,11 +114,18 @@ impl Controller {
         if self.stopping {
             return Err("后台正在退出".into());
         }
+        // Exit notifications can be queued behind a new tray click. Never raise
+        // a dead child, and never join a reader waiting on an admitted command.
+        if let Some(id) = self.child.as_ref().filter(|c| wait_exit(&c.process, 0) && c.cleaned.load(Ordering::Acquire)).map(|c| c.id) {
+            self.closed(window, id);
+        }
         if let Some(child) = &self.child {
+            self.client.panel_event("resident.panel.raise", json!({"pid":child.id,"target":target}));
             child.wake.raise(target).map_err(|_| "面板唤醒序号无效")?;
             let _ = child.updates.try_send(());
             return Ok(());
         }
+        let started = Instant::now();
         let folder = self.base.join("panel-native");
         super::platform::validate_directory(&folder)?;
         let executable = folder.join("Open Revo.exe");
@@ -155,6 +164,11 @@ impl Controller {
             cleaned: cleaned.clone(),
             stop: stop.clone(),
         };
+        let resources = Arc::new(PanelResources {
+            client: self.client.clone(),
+            released: Mutex::new(false),
+        });
+        self.client.panel_event("resident.panel.started", json!({"pid":id,"target":target,"launchMs":started.elapsed().as_millis()}));
         let transport = Arc::new(Transport {
             pipe,
             stop: stop.clone(),
@@ -164,6 +178,7 @@ impl Controller {
         let reader_wake = wake.clone();
         let draft = self.draft.clone();
         let client = self.client.clone();
+        let reader_resources = resources.clone();
         let reader = thread::Builder::new()
             .name("OpenRevo.Panel.Reader".into())
             .spawn(move || {
@@ -174,6 +189,7 @@ impl Controller {
                     reader_process,
                     reader_wake,
                     client,
+                    reader_resources,
                     draft,
                     receiver,
                     id,
@@ -184,6 +200,7 @@ impl Controller {
             .map_err(|e| e.to_string())?;
         let watched = process.clone();
         let watch_stop = stop.clone();
+        let watch_cleaned = cleaned.clone();
         let watcher = thread::Builder::new()
             .name("OpenRevo.Panel.Exit".into())
             .spawn(move || {
@@ -191,7 +208,9 @@ impl Controller {
                     return;
                 }
                 signal(&watch_stop);
-                while !cleaned.load(Ordering::Acquire) {
+                // The reader queues teardown without waiting for its execution.
+                // A previously admitted device command still settles in full.
+                while !watch_cleaned.load(Ordering::Acquire) {
                     thread::sleep(Duration::from_millis(10));
                 }
                 notify(window, CLOSED, id);
@@ -205,6 +224,8 @@ impl Controller {
             updates,
             reader,
             watcher,
+            resources,
+            cleaned,
         });
         guard.0.take();
         Ok(())
@@ -218,14 +239,17 @@ impl Controller {
         if self
             .child
             .as_ref()
-            .is_none_or(|c| c.id != id || !wait_exit(&c.process, 0))
+            .is_none_or(|c| c.id != id || !wait_exit(&c.process, 0) || !c.cleaned.load(Ordering::Acquire))
         {
             return;
         }
         let child = self.child.take().unwrap();
+        let _ = child.resources.release(None);
         let snapshot = child.wake.snapshot();
-        let _ = child.reader.join();
-        let _ = child.watcher.join();
+        self.client.panel_event("resident.panel.exited", json!({"pid":id}));
+        // Cleanup is complete; the workers own their handles until they return.
+        // Never join them on the tray/UI thread.
+        drop(child);
         if !self.stopping && snapshot.flags & PENDING_REOPEN != 0 {
             let _ = self.open(window, snapshot.target);
         }
@@ -269,6 +293,33 @@ impl Drop for Cleanup {
     fn drop(&mut self) {
         signal(&self.stop);
         self.cleaned.store(true, Ordering::Release);
+    }
+}
+struct PanelResources {
+    client: Client,
+    released: Mutex<bool>,
+}
+impl PanelResources {
+    fn release(&self, compact: Option<bool>) -> Result<(), String> {
+        let mut released = self.released.lock().unwrap_or_else(|e| e.into_inner());
+        if *released { return Ok(()); }
+        // Every exit path shares this latch: an old reader completing later
+        // must never clear the new panel's demand or revoke its plugin views.
+        *released = true;
+        self.client.stop_panel_sampling();
+        self.client.plugins.close_views();
+        match self.client.submit(Command::FinishPanelDetach(compact), true) {
+            Ok(_pending) => {
+                // This is a handoff acknowledgement. Completion (including
+                // LastMini persistence failures) is recorded by the actor.
+                self.client.panel_event("resident.panel-detach.queued", json!({"compact":compact}));
+                Ok(())
+            }
+            Err(receipt) => {
+                self.client.panel_event("resident.panel-detach.failed", json!(receipt));
+                Err("后台未受理面板资源交接".into())
+            }
+        }
     }
 }
 struct Transport {
@@ -323,12 +374,14 @@ fn run(
     process: Arc<OwnedHandle>,
     wake: Arc<PanelWake>,
     client: Client,
+    resources: Arc<PanelResources>,
     draft: Arc<Mutex<Option<Value>>>,
     updates: Receiver<()>,
     id: u32,
     session: u32,
     window: isize,
 ) {
+    let started = Instant::now();
     let mut publisher = None;
     let result = (|| -> Result<bool, String> {
         let connect_timeout = timer(15000)?;
@@ -341,6 +394,7 @@ fn run(
         {
             return Err("面板进程或会话身份不匹配".into());
         }
+        client.panel_event("resident.panel.connected", json!({"pid":id,"elapsedMs":started.elapsed().as_millis()}));
         let initial = wake.snapshot();
         let mut initial_draft = draft
             .lock()
@@ -377,14 +431,11 @@ fn run(
                         .ok_or("缺少面板唤醒序号")?;
                     wake.begin_detach(observed)
                         .map_err(|_| "面板关闭序号无效")?;
-                    release_panel_resources(&client);
                     let next = request.document["Draft"].clone();
                     let compact = next["Compact"].as_bool().unwrap_or(false);
                     // This is retained as editor data, never submitted as a device command.
                     *draft.lock().unwrap_or_else(|e| e.into_inner()) = Some(next);
-                    if let Ok(pending) = client.submit(Command::RememberPanelShape(compact), true) {
-                        let _ = pending.wait();
-                    }
+                    resources.release(Some(compact))?;
                     transport.send(&wire::result(previous, 7))?;
                     return Ok(true);
                 }
@@ -421,8 +472,11 @@ fn run(
         }
     })();
     let detached = matches!(result, Ok(true));
+    if let Err(error) = &result {
+        client.panel_event("resident.panel.connection-failed", json!({"pid":id,"error":error}));
+    }
     if !detached {
-        release_panel_resources(&client);
+        let _ = resources.release(None);
     }
     // Keep a successful detach acknowledgement readable until the child exits.
     if detached {
@@ -439,23 +493,6 @@ fn run(
         let _ = wait_exit(&process, GRACE);
     }
 }
-fn release_panel_resources(client: &Client) {
-    stop_panel_demand(client);
-    client.plugins.close_views();
-    if let Ok(pending) = client.submit(Command::CancelPanelTools, true) {
-        let _ = pending.wait();
-    }
-    if let Ok(pending) = client.submit(Command::ClosePluginViews, true) {
-        let _ = pending.wait();
-    }
-}
-fn stop_panel_demand(client: &Client) {
-    client.stop_panel_sampling();
-    if let Ok(pending) = client.submit(Command::PresentationDemand(0), true) {
-        let _ = pending.wait();
-    }
-}
-
 fn publish(transport: Arc<Transport>, wake: Arc<PanelWake>, client: Client, updates: Receiver<()>) {
     while !wait_exit(&transport.stop, 0) {
         if let Some(page) = client.plugins.navigation() {

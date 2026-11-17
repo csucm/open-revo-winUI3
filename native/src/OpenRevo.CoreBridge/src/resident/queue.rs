@@ -118,12 +118,13 @@ mod tests {
         assert!(!gate.busy());
     }
     #[test]
-    fn physical_key_never_waits_behind_hardware() {
+    fn physical_key_can_queue_while_sampling_is_busy() {
         let gate = Admission::default();
-        let ticket = gate.reserve(true).unwrap();
+        let sampling = gate.enter(gate.reserve(false).unwrap()).unwrap();
+        let key = gate.reserve(true).unwrap();
         assert!(matches!(gate.reserve(false), Err(Denied::Busy)));
-        gate.abandon();
+        drop(sampling);
+        drop(gate.enter(key).unwrap());
         assert!(gate.reserve(false).is_ok());
-        drop(ticket);
     }
 }

@@ -10,7 +10,10 @@ $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 $native = Join-Path $root 'src/OpenRevo.Native/OpenRevo.Native.csproj'
 $launcher = Join-Path $root 'src/OpenRevo.Start/OpenRevo.Start.csproj'
 $checks = Join-Path $root 'src/OpenRevo.Checks/OpenRevo.Checks.csproj'
-$version = ([xml](Get-Content -LiteralPath $native -Raw)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+[xml]$identity = Get-Content -LiteralPath (Join-Path $root 'src/OpenRevo.Release.props') -Raw
+$version = $identity.SelectSingleNode('//PublicReleaseVersion').InnerText
+$internal = $identity.SelectSingleNode('//InternalBuildVersion').InnerText
+if ($version -notmatch '^\d+\.\d+\.\d+$' -or $internal -notmatch '^\d+\.\d+\.\d+$') { throw 'Release versions must have three numeric components.' }
 $app = Join-Path $root ('app-' + $version + '-' + $Variant)
 $evidence = Join-Path $root ('evidence/package-' + $version + '-' + $Variant)
 $nativeOutput = $app
@@ -19,11 +22,7 @@ $installerTools = Join-Path $root 'installer'
 $residentProperties = @()
 $nativeVersionProperties = @()
 if ($NativeResident) {
-    [xml]$identity = Get-Content -LiteralPath (Join-Path $root 'src/OpenRevo.Release.props') -Raw
-    $public = $identity.SelectSingleNode('//PublicReleaseVersion').InnerText
-    $internal = $identity.SelectSingleNode('//InternalBuildVersion').InnerText
-    if ($public -ne $version -or $internal -notmatch '^\d+\.\d+\.\d+$') { throw 'Native pair version identity is inconsistent.' }
-    $nativeVersionProperties = @("-p:PublicReleaseVersion=$public", "-p:InternalBuildVersion=$internal", "-p:AssemblyVersion=$internal.0", "-p:FileVersion=$internal.0", "-p:InformationalVersion=$public", "-p:IncludeSourceRevisionInInformationalVersion=false")
+    $nativeVersionProperties = @("-p:PublicReleaseVersion=$version", "-p:InternalBuildVersion=$internal", "-p:AssemblyVersion=$internal.0", "-p:FileVersion=$internal.0", "-p:InformationalVersion=$version", "-p:IncludeSourceRevisionInInformationalVersion=false")
 }
 if ($ResidentLayout) {
     $stage = Join-Path (Split-Path -Parent $root) ('.build/resident-layout/' + $version + '-' + $Variant + '-' + [Guid]::NewGuid().ToString('N'))
@@ -189,8 +188,7 @@ if (-not $OutputName) {
 $installerOptions = @()
 if ($Compact) { $installerOptions = @('/DCompactPackage=1') }
 $payloadOption = if ($ResidentLayout) { $app } else { [IO.Path]::GetFileName($app) }
-$sourceOption = if ($ResidentLayout) { $zipPath } else { [IO.Path]::GetFileName($zipPath) }
-$installerOptions += @(('/DAppPayloadDir=' + $payloadOption),('/DSourceZipName=' + $sourceOption),('/DOutputName=' + $OutputName))
+$installerOptions += @(('/DAppPayloadDir=' + $payloadOption),('/DOutputName=' + $OutputName))
 if ($ResidentLayout) {
     $installerOptions += @('/DResidentLayout=1',('/DInstallerFilterPath=' + (Join-Path $installerTools 'InstallerFolderFilter.dll')))
 }

@@ -1,4 +1,4 @@
-use super::{ControlState, HardwareSession, Outcome, PerformanceState, Receipt};
+use super::{ControlState, FactorySelection, HardwareSession, Outcome, PerformanceState, Receipt};
 use crate::resident::platform::{bios_string, validate_directory};
 use openrevo_core::system::config_io;
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ const FILE_NAME: &str = "factory-mode.json";
 const MAX_BYTES: u64 = 4096;
 
 #[derive(Deserialize, PartialEq, Serialize)]
-struct Device {
+pub(super) struct Device {
     board: String,
     product: String,
     bios: String,
@@ -23,7 +23,7 @@ struct Device {
 }
 
 impl Device {
-    fn read(control: &ControlState) -> Option<Self> {
+    pub(super) fn read(control: &ControlState) -> Option<Self> {
         Some(Self {
             board: bios_string("BaseBoardProduct").filter(|s| !s.trim().is_empty())?,
             product: bios_string("SystemProductName").filter(|s| !s.trim().is_empty())?,
@@ -73,6 +73,10 @@ impl Selection {
 }
 
 impl HardwareSession {
+    pub(super) fn factory_record_matches_device(&self, control: &ControlState) -> Result<bool, String> {
+        Ok(Selection::read(&self.root)?.is_some_and(|record|
+            Device::read(control).as_ref() == Some(&record.device)))
+    }
     pub(super) fn remember_factory_mode(&self, mode: Option<u8>, receipt: &mut Receipt) {
         let Some(control) = self.state.as_ref() else {
             return;
@@ -123,20 +127,35 @@ impl HardwareSession {
         if current == 4 || (current == mode && before.recognized(true)) {
             return Some(Receipt::new(Outcome::Skipped));
         }
-        let reset = boot_tables_cleared(before);
+        let reset = boot_tables_cleared(before, &record.device);
         if !reset && !before.recognized(false) {
             return Some(Receipt::error(Outcome::Rejected, "启动风扇表状态未识别"));
         }
         // An installed Core restores once at automatic takeover. The live write
         // rechecks the captured state, hardware admission, and the DC power gate.
-        Some(self.change_performance(mode, true, Some(before.clone()), None, reset, false))
+        Some(self.change_performance(
+            FactorySelection::Set(mode, true),
+            Some(before.clone()),
+            None,
+            reset,
+            false,
+        ))
     }
 }
 
-fn boot_tables_cleared(before: &PerformanceState) -> bool {
+fn boot_tables_cleared(before: &PerformanceState, device: &Device) -> bool {
+    let jiguang_x_boot_flag = before.isolated == 0x08
+        && before.ap == 0
+        && before.trigger == 0
+        && before.ramp == 0
+        && device.board.eq_ignore_ascii_case("GM6IQ0C")
+        && device.product.eq_ignore_ascii_case("JiguangX Series GM6IQ0C")
+        && device.bios.eq_ignore_ascii_case("N.1.04MRO11")
+        && device.project == 16
+        && device.platform == 0;
     before.custom == 64
         && before.latch == 0
         && before.ap & 129 == 0
-        && before.isolated == 0
+        && (before.isolated == 0 || jiguang_x_boot_flag)
         && before.tables.iter().all(|&value| value == 0)
 }

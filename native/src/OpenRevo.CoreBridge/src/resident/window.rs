@@ -562,7 +562,11 @@ impl Presentation {
             if sequence != self.notice_sequence {
                 self.notice_sequence = sequence;
                 if let Some(feature) = notice["Feature"].as_str() {
-                    if feature == "brightness" {
+                    if feature == "performance_mode" {
+                        if let Some(mode) = mode.filter(|&m| notice["Value"] == m) {
+                            message = Some(super::osd::Message::mode(mode));
+                        }
+                    } else if feature == "brightness" {
                         if let Some(level) = notice["Value"].as_u64() {
                             message = Some(super::osd::Message {
                                 text: format!("屏幕亮度 · {level}%"),

@@ -31,10 +31,9 @@ pub enum Command {
     Plugins(Value),
     Maintenance(Value),
     Application(Value),
-    CancelPanelTools,
+    FinishPanelDetach(Option<bool>),
     LoadBackgroundPlugins,
     StopBackgroundPlugins,
-    ClosePluginViews,
     Takeover,
     Release,
     Factory {
@@ -47,10 +46,7 @@ pub enum Command {
     ToggleAwake,
     Suspension(bool),
     PowerStatusChanged,
-    PhysicalKey {
-        generation: u64,
-        code: u32,
-    },
+    PhysicalKey(ModeKeyPress),
     DesktopPolicy {
         link: bool,
         enabled: bool,
@@ -84,7 +80,6 @@ pub enum Command {
     },
     CommitPanelPreference(Value),
     CommitPanelLayout(Value),
-    RememberPanelShape(bool),
     PresentationDemand(u8),
     SetOsdEnabled(bool),
     SetOsdAppearance {
@@ -114,10 +109,12 @@ struct Request {
 enum ActorMessage {
     Request(Request),
     Wake,
+    KeyListenerFailed,
 }
 
 #[derive(Clone)]
 pub struct Client {
+    directory: Arc<PathBuf>,
     sender: SyncSender<ActorMessage>,
     admission: Admission,
     snapshot: Arc<Mutex<Arc<Value>>>,
@@ -164,6 +161,9 @@ fn denied(reason: Denied) -> Receipt {
     })
 }
 impl Client {
+    pub fn panel_event(&self, operation: &str, value: Value) {
+        let _ = HardwareSession::audit_at(&self.directory, operation, value);
+    }
     pub fn submit(&self, command: Command, wait: bool) -> Result<Pending, Receipt> {
         let ticket = self.admission.reserve(wait).map_err(denied)?;
         let cancellation = ticket.cancellation();
@@ -246,16 +246,27 @@ impl Runtime {
         native_services::set_data_root(directory.to_str().ok_or("数据路径不是有效 Unicode")?)?;
         let sys = SystemPreferences::load(&directory);
         let app = read_preferences(&directory)?;
+        let layouts = super::panel_settings::layouts(&directory);
+        let initial_panel = json!({
+            "Revision": 0,
+            "Initialized": false,
+            "PanelPreferences": panel_preferences(&app, &sys),
+            "LastMini": sys.last_mini,
+            "Layouts": layouts,
+            "Osd": osd_preferences(&app, &sys),
+            "Display": { "LowRefreshOnBattery": app["LowRefreshOnBattery"] == true }
+        });
         let changed: Arc<dyn Fn() + Send + Sync> = Arc::new(changed);
         let plugins = Arc::new(super::plugins::Shared::new(changed.clone()));
         let updates = Arc::new(super::updates::Shared::new(installed, changed.clone()));
         let (sender, receiver) = mpsc::sync_channel(64);
         let client = Client {
+            directory: Arc::new(directory.clone()),
             plugins: plugins.clone(),
             updates: updates.clone(),
             sender,
             admission: Admission::default(),
-            snapshot: Arc::new(Mutex::new(Arc::new(Value::Null))),
+            snapshot: Arc::new(Mutex::new(Arc::new(initial_panel))),
             stop: Arc::new(AtomicBool::new(false)),
             panel_sampling_stopped: Arc::new(AtomicBool::new(true)),
             tray_hover: Arc::new(AtomicBool::new(false)),
@@ -280,7 +291,7 @@ impl Runtime {
                         plugins,
                     ),
                     client: background,
-                    layouts: super::panel_settings::layouts(&directory),
+                    layouts,
                     presentation_demand: 0,
                     telemetry: super::telemetry::Telemetry::default(),
                     next_sample: Instant::now(),
@@ -297,8 +308,10 @@ impl Runtime {
                     preferences: app,
                     settings: sys,
                     listener: None,
+                    key_recovery_used: false,
                     last_key: None,
                     automatic_pending: false,
+                    automatic_attempts: 0,
                     last_automatic: None,
                     revision: 0,
                     changed,
@@ -328,6 +341,27 @@ impl Drop for Runtime {
         let _ = self.finish();
     }
 }
+fn panel_preferences(app: &Value, sys: &SystemPreferences) -> Value {
+    json!({
+        "Theme": app["Theme"],
+        "SampleSeconds": app["SampleSeconds"],
+        "WakeMode": sys.wake_mode,
+        "MiniAutoHide": sys.mini_auto_hide,
+        "BatteryOverride": sys.unlock_battery_limit,
+        "TrayTelemetry": sys.tray_telemetry
+    })
+}
+
+fn osd_preferences(app: &Value, sys: &SystemPreferences) -> Value {
+    json!({
+        "Enabled": app["OsdEnabled"],
+        "Theme": sys.osd_theme,
+        "Scale": sys.osd_scale,
+        "Position": sys.osd_position,
+        "Motion": sys.motion_speed
+    })
+}
+
 fn read_preferences(directory: &std::path::Path) -> Result<Value, String> {
     let bytes = AppPreferences::load_snapshot(directory, false).map_err(|_| "应用设置读取失败")?;
     serde_json::from_slice(&bytes).map_err(|e| e.to_string())
@@ -337,6 +371,18 @@ struct Listener {
     stop: Arc<AtomicBool>,
     thread: JoinHandle<()>,
 }
+pub struct ModeKeyPress {
+    generation: u64,
+    code: u32,
+    pressed: Instant,
+    queued: Arc<AtomicBool>,
+}
+impl Drop for ModeKeyPress {
+    fn drop(&mut self) {
+        self.queued.store(false, Ordering::Release);
+    }
+}
+
 struct Actor {
     hardware: HardwareSession,
     policies: Policies,
@@ -360,8 +406,10 @@ struct Actor {
     osd_notice: Option<Value>,
     osd_sequence: u64,
     listener: Option<Listener>,
+    key_recovery_used: bool,
     last_key: Option<Instant>,
     automatic_pending: bool,
+    automatic_attempts: u8,
     last_automatic: Option<Instant>,
     revision: u64,
     changed: Arc<dyn Fn() + Send + Sync>,
@@ -453,6 +501,10 @@ impl Actor {
                     {
                         self.next_sample = Instant::now();
                     }
+                }
+                Ok(ActorMessage::KeyListenerFailed) => {
+                    self.synchronize_keys();
+                    self.publish();
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -650,9 +702,24 @@ impl Actor {
     fn execute(&mut self, command: Command) -> Receipt {
         match command {
             Command::Application(request) => self.updates.execute(request),
-            Command::CancelPanelTools => {
+            Command::FinishPanelDetach(compact) => {
+                self.execute(Command::PresentationDemand(0));
                 self.updates.cancel();
-                Receipt::new(Outcome::Applied)
+                let mut views = desktop_result(self.plugins.close_views(), Outcome::Applied);
+                if let Some(value) = compact.filter(|value| *value != self.settings.last_mini) {
+                    let shape = super::panel_settings::commit_system(
+                        &self.directory,
+                        &mut self.settings,
+                        openrevo_core::system::system_preferences::SystemPreferenceEdit::LastMini {
+                            value,
+                        },
+                    );
+                    if matches!(shape.outcome, Outcome::ConfigurationSaveFailed) {
+                        views = shape;
+                    }
+                }
+                let _ = self.hardware.audit("resident.panel-detach.completed", json!(views));
+                views
             }
             Command::Maintenance(request) => {
                 let mut receipt = self.maintenance(request);
@@ -670,9 +737,6 @@ impl Actor {
             Command::LoadBackgroundPlugins => self.plugins.load_background(),
             Command::StopBackgroundPlugins => {
                 desktop_result(self.plugins.stop_all(), Outcome::Applied)
-            }
-            Command::ClosePluginViews => {
-                desktop_result(self.plugins.close_views(), Outcome::Applied)
             }
             Command::PluginAction { lease, action } => {
                 let permission = action.permission(false);
@@ -729,39 +793,44 @@ impl Actor {
                 Receipt::new(Outcome::Applied)
             }
             Command::Suspension(sleeping) => {
-                self.policies.observe_sleep(&mut self.hardware, sleeping)
+                if !sleeping {
+                    self.key_recovery_used = false;
+                }
+                let restored = (!sleeping).then(|| self.hardware.restore_battery_on_resume());
+                let policy = self.policies.observe_sleep(&mut self.hardware, sleeping);
+                if let Some(receipt) = restored.filter(|r| !matches!(r.outcome, Outcome::Skipped)) {
+                    let _ = self.hardware.audit("resident.battery-resume", json!(receipt));
+                    if matches!(policy.outcome, Outcome::Rejected | Outcome::Unknown | Outcome::ConfigurationSaveFailed) {
+                        policy
+                    } else { receipt }
+                } else { policy }
             }
-            Command::PhysicalKey { generation, code } => {
+            Command::PhysicalKey(key) => {
+                let (generation, code, pressed) = (key.generation, key.code, key.pressed);
                 if generation != self.client.generation.load(Ordering::Acquire)
                     || !self.hardware.active()
                     || !self.hardware.classic()
                 {
                     return Receipt::new(Outcome::Skipped);
                 }
-                if self
-                    .last_key
-                    .is_some_and(|at| at.elapsed() < Duration::from_millis(500))
-                {
+                if pressed.elapsed() >= Duration::from_secs(2) {
+                    let _ = self.hardware.audit("modekey.expired", json!({"code":code}));
                     return Receipt::new(Outcome::Skipped);
                 }
-                self.last_key = Some(Instant::now());
-                // Refresh under the application transaction; do not cycle a stale cached mode.
-                let before = match self.hardware.refresh_mode() {
-                    Ok(mode) => mode,
-                    Err(error) => return Receipt::error(Outcome::Unknown, error),
-                };
-                let limited =
-                    !self.hardware.allow_battery && super::platform::ac_online() != Some(true);
-                let mode = match before {
-                    Some(1) => 2,
-                    Some(2) if !limited => 3,
-                    _ => 1,
-                };
-                let _ = self.hardware.audit(
-                    "modekey.intent",
-                    json!({"code":code,"before":before,"target":mode,"batteryLimited":limited}),
-                );
-                let receipt = self.hardware.select_factory(mode, mode == 3);
+                if self.last_key.is_some_and(|at| {
+                    pressed.saturating_duration_since(at) < Duration::from_millis(500)
+                }) {
+                    return Receipt::new(Outcome::Skipped);
+                }
+                self.last_key = Some(pressed);
+                self.key_recovery_used = false;
+                drop(key);
+                let receipt = self.hardware.cycle_factory(code);
+                if matches!(receipt.outcome, Outcome::ReadbackConfirmed) {
+                    if let Some(mode) = receipt.mode {
+                        self.notify_osd("performance_mode", mode);
+                    }
+                }
                 let _ = self.hardware.audit("modekey.result", json!(receipt));
                 receipt
             }
@@ -927,18 +996,6 @@ impl Actor {
                     }
                     Err(error) => Receipt::error(Outcome::ConfigurationSaveFailed, error),
                 }
-            }
-            Command::RememberPanelShape(value) => {
-                if value == self.settings.last_mini {
-                    return Receipt::new(Outcome::Skipped);
-                }
-                super::panel_settings::commit_system(
-                    &self.directory,
-                    &mut self.settings,
-                    openrevo_core::system::system_preferences::SystemPreferenceEdit::LastMini {
-                        value,
-                    },
-                )
             }
             Command::SetOsdEnabled(enabled) => {
                 use openrevo_core::system::app_preferences::AppPreferenceEdit;
@@ -1158,11 +1215,18 @@ impl Actor {
     }
     fn automatic_takeover(&mut self) {
         self.last_automatic = Some(Instant::now());
-        let receipt = self.hardware.takeover();
+        self.automatic_attempts = self.automatic_attempts.saturating_add(1);
+        let receipt = self.hardware.takeover_at_startup();
         self.automatic_pending = receipt
             .message
             .as_deref()
-            .is_some_and(|m| m.starts_with("请先正常退出其他硬件控制程序："));
+            .is_some_and(|m| {
+                m.starts_with("请先正常退出其他硬件控制程序：")
+                    || self.automatic_attempts < 3
+                        && (m.starts_with("硬件读取失败")
+                            || m.starts_with("EC 控制快照暂不可用")
+                            || m == "Core驱动尚未就绪")
+            });
         let _ = self.hardware.audit("resident.takeover", json!(receipt));
         if self.installed && matches!(receipt.outcome, Outcome::ReadbackConfirmed) {
             if let Some(restore) = self.hardware.restore_factory_mode() {
@@ -1204,8 +1268,21 @@ impl Actor {
             self.stop_keys();
             return;
         }
-        if self.listener.is_some() {
-            return;
+        if let Some(listener) = &self.listener {
+            if self.key_recovery_used {
+                return;
+            }
+            let failure = listener.status.lock().unwrap_or_else(|e| e.into_inner())["Failure"]
+                .as_str()
+                .map(str::to_owned);
+            let Some(failure) = failure else {
+                return;
+            };
+            let _ = self
+                .hardware
+                .audit("modekey.listener.failed", json!(failure));
+            self.stop_keys();
+            self.key_recovery_used = true;
         }
         let generation = self
             .client
@@ -1220,6 +1297,7 @@ impl Actor {
         ));
         let observed = status.clone();
         let thread = thread::spawn(move || {
+            let queued = Arc::new(AtomicBool::new(false));
             let result = listen_mode_keys(|event| {
                 if stop_listener.load(Ordering::Acquire)
                     || client.stop.load(Ordering::Acquire)
@@ -1231,14 +1309,31 @@ impl Actor {
                     observed.lock().unwrap_or_else(|e| e.into_inner())["Subscribed"] = json!(true);
                 }
                 if let ModeKeyEvent::Pressed(code) = event {
-                    let _ = client.submit(Command::PhysicalKey { generation, code }, false);
+                    let input = if queued.swap(true, Ordering::AcqRel) {
+                        "Coalesced".into()
+                    } else {
+                        let key = ModeKeyPress {
+                            generation,
+                            code,
+                            pressed: Instant::now(),
+                            queued: queued.clone(),
+                        };
+                        match client.submit(Command::PhysicalKey(key), true) {
+                            Ok(_) => "Queued".into(),
+                            Err(receipt) => json!(receipt.outcome),
+                        }
+                    };
+                    observed.lock().unwrap_or_else(|e| e.into_inner())["LastInput"] = input;
                 }
                 true
             });
             if let Err(error) = result {
-                let mut status = observed.lock().unwrap_or_else(|e| e.into_inner());
-                status["Subscribed"] = json!(false);
-                status["Failure"] = json!(error.to_string());
+                {
+                    let mut status = observed.lock().unwrap_or_else(|e| e.into_inner());
+                    status["Subscribed"] = json!(false);
+                    status["Failure"] = json!(error.to_string());
+                }
+                let _ = client.sender.try_send(ActorMessage::KeyListenerFailed);
             }
         });
         self.listener = Some(Listener {
@@ -1248,8 +1343,10 @@ impl Actor {
         });
     }
     fn stop_keys(&mut self) {
-        self.client.generation.fetch_add(1, Ordering::AcqRel);
+        self.last_key = None;
+        self.key_recovery_used = false;
         if let Some(listener) = self.listener.take() {
+            self.client.generation.fetch_add(1, Ordering::AcqRel);
             listener.stop.store(true, Ordering::Release);
             let _ = listener.thread.join();
         }
@@ -1257,8 +1354,8 @@ impl Actor {
     fn publish(&mut self) {
         self.revision = self.revision.wrapping_add(1);
         let mut snapshot = json!({"Revision":self.revision,
-            "Ready":self.hardware.admission["ready"],"Initialized":true,"PanelPreferences":{"Theme":self.preferences["Theme"],"SampleSeconds":self.preferences["SampleSeconds"],"WakeMode":self.settings.wake_mode,"MiniAutoHide":self.settings.mini_auto_hide,"BatteryOverride":self.settings.unlock_battery_limit,"TrayTelemetry":self.settings.tray_telemetry},"LastMini":self.settings.last_mini,"Layouts":self.layouts,"Active":self.hardware.active(),"Mode":self.hardware.mode,
-            "Osd":{"Enabled":self.preferences["OsdEnabled"],"Theme":self.settings.osd_theme,"Scale":self.settings.osd_scale,"Position":self.settings.osd_position,"Motion":self.settings.motion_speed},"Display":self.display.snapshot(),"Tuning":self.hardware.tuning_baseline,"PhysicalMode":self.listener.as_ref().map(|l|l.status.lock().unwrap_or_else(|e|e.into_inner()).clone()),"Control":self.hardware.state,"Admission":self.hardware.admission,"Faulted":self.hardware.faulted,
+            "Ready":self.hardware.admission["ready"],"Initialized":true,"PanelPreferences":panel_preferences(&self.preferences, &self.settings),"LastMini":self.settings.last_mini,"Layouts":self.layouts,"Active":self.hardware.active(),"Mode":self.hardware.mode,
+            "Osd":osd_preferences(&self.preferences, &self.settings),"Display":self.display.snapshot(),"Tuning":self.hardware.tuning_baseline,"PhysicalMode":self.listener.as_ref().map(|l|l.status.lock().unwrap_or_else(|e|e.into_inner()).clone()),"Control":self.hardware.state,"BatteryLimit":self.hardware.battery_limit(),"BatteryWritable":self.hardware.supports("battery"),"Admission":self.hardware.admission,"Faulted":self.hardware.faulted,
             "RequestedFanBoost":self.hardware.requested_boost,"KeepAwake":self.power.keep_awake_enabled(),
             "WaitingForTakeover":self.automatic_pending,"PhysicalModeAttempted":self.listener.is_some(),
             "Switches":self.switches,"Gpu":self.gpu.snapshot(),"OsdNotice":self.osd_notice,"PresentationDemand":self.presentation_demand,"Accepting":self.client.admission.accepting()});

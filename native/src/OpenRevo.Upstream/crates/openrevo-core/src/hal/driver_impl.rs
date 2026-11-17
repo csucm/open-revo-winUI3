@@ -77,14 +77,12 @@ impl MechrevoHardwareHAL for MechrevoHALImpl {
             ec::ADDR_SECOND_FAN_RPM_B1,
             ec::ADDR_SECOND_FAN_RPM_B2,
         ];
-        if let Some(bytes) = wmi_ec::wmi_batch_read_ec(&registers) {
-            if bytes.len() == 4 {
-                let cpu_rpm = ((bytes[0] as u16) << 8) | (bytes[1] as u16);
-                let gpu_rpm = ((bytes[2] as u16) << 8) | (bytes[3] as u16);
-                return Ok((cpu_rpm, gpu_rpm));
-            }
-        }
-        Err(HalError::RegisterAccessFailed("Failed to batch read fan RPM".to_string()))
+        let bytes = wmi_ec::wmi_batch_read_ec_checked(&registers)
+            .map_err(|address| HalError::RegisterAccessFailed(format!("Fan RPM read failed at {address:#06x}")))?;
+        let [cpu_hi, cpu_lo, gpu_hi, gpu_lo] = bytes[..] else {
+            return Err(HalError::RegisterAccessFailed("Invalid fan RPM response length".into()));
+        };
+        Ok((u16::from_be_bytes([cpu_hi, cpu_lo]), u16::from_be_bytes([gpu_hi, gpu_lo])))
     }
 
     fn is_hardware_supported(&self) -> bool {

@@ -11,6 +11,8 @@ public partial class App : Application
     private Window? pluginPreviewWindow;
 #elif RESIDENT_PANEL_HOST
     private MainWindow? window;
+    private readonly long residentStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+    private Task residentDiagnostics = Task.CompletedTask;
 #else
     private MainWindow? window;
     private ApplicationHardwareRuntime? hardwareRuntime;
@@ -168,6 +170,8 @@ public partial class App : Application
 #if RESIDENT_PANEL_HOST
     private async Task OpenResidentPanelAsync()
     {
+        residentDiagnostics = Task.Run(DiagnosticLog.StartPanelProcess);
+        RecordResidentPanelPhase("launched");
         PanelClient? client = null;
         try
         {
@@ -179,8 +183,13 @@ public partial class App : Application
 #else
             client = await PanelClient.ConnectAsync(pipe, parentId);
 #endif
+            RecordResidentPanelPhase("connected");
             window = new MainWindow(client);
+            RecordResidentPanelPhase("constructed");
+            window.PrepareResidentPresentation();
+            RecordResidentPanelPhase("prepared");
             window.Activate();
+            RecordResidentPanelPhase("activated");
         }
         catch (Exception error)
         {
@@ -189,6 +198,13 @@ public partial class App : Application
             Environment.ExitCode = 1;
             Exit();
         }
+    }
+
+    internal void RecordResidentPanelPhase(string phase)
+    {
+        double elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(residentStarted).TotalMilliseconds;
+        _ = residentDiagnostics.ContinueWith(_ => DiagnosticLog.Record("resident.panel.startup", new { phase, elapsedMs }),
+            CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
 
     private static void RecordResidentPanelFailure(string eventName, Exception error)

@@ -38,6 +38,18 @@ struct MulongWorker {
 
 static WORKER: LazyLock<Option<MulongWorker>> = LazyLock::new(init_worker);
 
+fn put_mulong_data(params: &IWbemClassObject, request: u64) -> windows::core::Result<()> {
+    let value = VARIANT::from(BSTR::from(request.to_string()));
+    // CIM_UINT64 providers can require a decimal BSTR. Fall back during
+    // parameter setup so each request still executes the WMI method once.
+    unsafe {
+        params.Put(w!("Data"), 0, &value, 0).or_else(|_| {
+            let value = VARIANT::from(request as i64);
+            params.Put(w!("Data"), 0, &value, 0)
+        })
+    }
+}
+
 fn init_worker() -> Option<MulongWorker> {
     let (tx, rx) = channel::<MulongTask>();
 
@@ -167,9 +179,8 @@ fn worker_loop(rx: Receiver<MulongTask>) {
                         let instance_path = instance_path_opt.as_ref()?;
 
                         let in_params = in_param_class.SpawnInstance(0).ok()?;
-                        let req_data: i64 = ((1i64) << 40) | (addr as i64);
-                        let mut var_data = VARIANT::from(req_data);
-                        in_params.Put(w!("Data"), 0, &mut var_data, 0).ok()?;
+                        let request = (1u64 << 40) | u64::from(addr);
+                        put_mulong_data(&in_params, request).ok()?;
 
                         let method_name = BSTR::from("GetSetULong");
                         let mut out_params: Option<IWbemClassObject> = None;
@@ -210,9 +221,8 @@ fn worker_loop(rx: Receiver<MulongTask>) {
                         let instance_path = instance_path_opt.as_ref()?;
 
                         let in_params = in_param_class.SpawnInstance(0).ok()?;
-                        let req_data: i64 = ((val as i64) << 16) | (addr as i64);
-                        let mut var_data = VARIANT::from(req_data);
-                        in_params.Put(w!("Data"), 0, &mut var_data, 0).ok()?;
+                        let request = (u64::from(val) << 16) | u64::from(addr);
+                        put_mulong_data(&in_params, request).ok()?;
 
                         let method_name = BSTR::from("GetSetULong");
                         let hr = services.ExecMethod(
@@ -241,12 +251,7 @@ fn worker_loop(rx: Receiver<MulongTask>) {
 
                         let in_params = in_param_class.SpawnInstance(0).ok()?;
 
-                        // Try string representation first (standard CIM_UINT64 handling in WMI), fallback to VT_I8
-                        let mut var_data = VARIANT::from(BSTR::from(format!("{}", raw_val)));
-                        if in_params.Put(w!("Data"), 0, &mut var_data, 0).is_err() {
-                            var_data = VARIANT::from(raw_val as i64);
-                            in_params.Put(w!("Data"), 0, &mut var_data, 0).ok()?;
-                        }
+                        put_mulong_data(&in_params, raw_val).ok()?;
 
                         let method_name = BSTR::from("GetSetULong");
                         let mut out_params: Option<IWbemClassObject> = None;
@@ -281,11 +286,7 @@ fn worker_loop(rx: Receiver<MulongTask>) {
 
                         let in_params = in_param_class.SpawnInstance(0).ok()?;
 
-                        let mut var_data = VARIANT::from(BSTR::from(format!("{}", raw_val)));
-                        if in_params.Put(w!("Data"), 0, &mut var_data, 0).is_err() {
-                            var_data = VARIANT::from(raw_val as i64);
-                            in_params.Put(w!("Data"), 0, &mut var_data, 0).ok()?;
-                        }
+                        put_mulong_data(&in_params, raw_val).ok()?;
 
                         let method_name = BSTR::from("GetSetULong");
                         let mut out_params: Option<IWbemClassObject> = None;

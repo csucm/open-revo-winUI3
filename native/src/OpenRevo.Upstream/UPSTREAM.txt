@@ -17,3 +17,13 @@ Native adaptations: bounded native_metrics and native_services; display_tuning e
 - 7e3b7e9 / upstream PR #153: retain the local aligned PStates20 buffers, P0/domain/range parser and bridge compare/readback protections. Backport ignoring unrelated clock domains; add checked MHz-to-kHz conversion.
 - 146ca47 / edeb96d: Native already has read-only EC power queries and masked writes with admission/readback checks. Close its compare-to-write race inside the existing ACPI RMW lock. Do not import restore_ec_power_options, new EC addresses or startup/wake writes.
 - Keep REQ-134 adapters, REQ-135 software Win lock and approved panel handoff. Engine/official FFI, new performance modes/default OC, Tauri hooks/streamer, watchers, register-only renames and other files remain deferred. See ../../evidence/core-selective-sync-20261104/REPORT.md for the per-file disposition, source snapshots, build receipts and unverified behavior.
+
+2026-11-16 RevoCore RC-080:
+- f829ee8c28a2b927af02d6fcfa6fabbf1ad0871c: single-byte MULong uses decimal BSTR with i64 fallback during parameter setup. The same helper preserves existing raw command parameters. Each request invokes WMI at most once.
+- 1c511de4835006533992d1c40948a07554c44605: add read_cpu_temp to the existing Baolongda T140 manifest. Uses the current RevoCore temperature snapshot and fallback.
+- 69c884512163a372baa69a30451eab57fcb3f0de: review logo route detection and combine the existing probes for Native capability reads while retaining the currently admitted routes.
+- Core 0.9.5 remains pinned. See ../../../evidence/rc-080-upstream-core/REPORT.md for local changes and verification.
+2026-11-16 RevoCore RC-082:
+- Reference c600f3b5a452260f54034ff0e80037916cd674ab mode-before-parameters ordering. Implemented in local CoreBridge/resident/tuning.rs rather than copying the upstream engine.
+- Normal classic tuning preserves fan boost, confirms custom mode before settings, validates fan-table staging and retains byte readback. Partial failure retains existing protective cooling policy. The legacy C# JSON table gate is unchanged.
+- The pinned Core revision is unchanged. See ../../../evidence/rc-082-custom-without-forced-fans/REPORT.md. Hardware validation is pending.

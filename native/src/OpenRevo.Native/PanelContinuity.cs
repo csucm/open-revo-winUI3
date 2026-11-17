@@ -266,7 +266,7 @@ public sealed partial class MainWindow
         PreparePanelLayout(bounds);
         AlignCaption(); ArrangeDesktopViewport(); root.UpdateLayout();
     }
-    private void ConfigurePanelMode(bool targetMini)
+    private void ConfigurePanelMode(bool targetMini, bool render = true)
     {
         mini = targetMini;
         if (mini)
@@ -285,7 +285,9 @@ public sealed partial class MainWindow
             var minimum = MinimumDesktopPixels();
             normalBounds.Width = Math.Max(normalBounds.Width, minimum.Width); normalBounds.Height = Math.Max(normalBounds.Height, minimum.Height);
         }
-        UpdatePanelToggle(); Render(); Title = mini ? "Open-Revo Mini" : "Open-Revo";
+        UpdatePanelToggle();
+        if (render) Render();
+        Title = mini ? "Open-Revo Mini" : "Open-Revo";
         if (AppWindow.Presenter is OverlappedPresenter presenter) { presenter.IsMaximizable = !mini || captionModeAttached; presenter.IsResizable = !mini; }
     }
 }

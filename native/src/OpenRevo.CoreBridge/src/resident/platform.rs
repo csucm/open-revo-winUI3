@@ -176,6 +176,15 @@ pub fn gm7tg0m_identity() -> bool {
             && bios_string("BIOSVersion").is_some_and(|s| s.eq_ignore_ascii_case("N.1.07MRO06"))
     })
 }
+pub(crate) fn gm6iq0c_battery_identity() -> bool {
+    static MATCH: OnceLock<bool> = OnceLock::new();
+    *MATCH.get_or_init(|| {
+        bios_string("BaseBoardProduct").is_some_and(|s| s.eq_ignore_ascii_case("GM6IQ0C"))
+            && bios_string("SystemProductName")
+                .is_some_and(|s| s.eq_ignore_ascii_case("JiguangX Series GM6IQ0C"))
+            && bios_string("BIOSVersion").is_some_and(|s| s.eq_ignore_ascii_case("N.1.04MRO11"))
+    })
+}
 fn regular(path: &Path) -> Result<(), String> {
     let meta = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !meta.is_file() || meta.file_attributes() & 0x400 != 0 {

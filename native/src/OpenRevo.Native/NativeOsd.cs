@@ -144,8 +144,14 @@ internal sealed class NativeOsd:IDisposable
         var area=DisplayArea.GetFromWindowId(window.AppWindow.Id,DisplayAreaFallback.Primary).WorkArea;
         double scale=preferences.OsdScale/100d;
         width=Math.Min(width,area.Width);height=Math.Min(height,area.Height);
-        int x=preferences.OsdPosition=="top-left"?area.X+(int)Math.Round(4*dpi):area.X+(area.Width-width)/2;
-        int y=preferences.OsdPosition=="center"?area.Y+(area.Height-height)/2:preferences.OsdPosition=="bottom-center"?area.Y+area.Height-height-(int)Math.Round(24*dpi):area.Y+(int)Math.Round(4*dpi);
+        int x = preferences.OsdPosition == "top-left"
+            ? area.X + area.Width * 8 / 100 : area.X + (area.Width - width) / 2;
+        int y = preferences.OsdPosition switch
+        {
+            "center" => area.Y + (area.Height - height) / 2,
+            "bottom-center" => area.Y + area.Height - height - (int)Math.Round(24 * dpi),
+            _ => area.Y + area.Height * 12 / 100
+        };
         x=Math.Clamp(x,area.X,area.X+area.Width-width);y=Math.Clamp(y,area.Y,area.Y+area.Height-height);
         window.AppWindow.MoveAndResize(new RectInt32(x,y,Math.Max(1,width),Math.Max(1,height)));
         if(fresh)ApplyNativeFrame();

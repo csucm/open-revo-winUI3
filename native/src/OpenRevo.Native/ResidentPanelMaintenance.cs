@@ -20,7 +20,7 @@ public sealed partial class MainWindow
 
     private async Task ReadResidentMaintenanceSettingsAsync()
     {
-        if (residentMaintenance != null || residentMaintenanceReading || closed || residentDetaching ||
+        if (!residentFirstFrameReady || residentMaintenance != null || residentMaintenanceReading || closed || residentDetaching ||
             residentSnapshot?.Ready != true) return;
         residentMaintenanceReading = true;
         try

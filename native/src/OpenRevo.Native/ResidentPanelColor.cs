@@ -18,7 +18,7 @@ public sealed partial class MainWindow
 
     private async Task ReadResidentColorAsync()
     {
-        if (residentColorReading || residentDetaching || closed || residentSnapshot?.Ready != true) return;
+        if (!residentFirstFrameReady || residentColorReading || residentDetaching || closed || residentSnapshot?.Ready != true) return;
         var display = residentSnapshot.Display;
         var key = (display.Device, display.Active);
         if (residentColorDisplay == key) return;

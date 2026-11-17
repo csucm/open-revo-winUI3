@@ -302,9 +302,10 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
             }
         }
 
-        // Native Tongfang ACPI channel fallback: directly query hardware EC RPM registers
-        if self.manifest.channels.values().any(|c| matches!(c, ChannelDef::AcpiIoctl { .. }))
-            || crate::driver::wmi_ec::is_acpi_driver_available()
+        // The implicit Tongfang fan map is only for an ACPI-only contract.
+        // A mixed contract needs an explicit fan action to select a channel.
+        if !self.manifest.channels.is_empty()
+            && self.manifest.channels.values().all(|c| matches!(c, ChannelDef::AcpiIoctl { .. }))
         {
             let real = crate::hal::driver_impl::MechrevoHALImpl::new();
             return real.read_fan_rpm();
@@ -395,6 +396,10 @@ impl MechrevoHardwareHAL for DeclarativeHardwareDriver {
 }
 
 impl HardwareDriver for DeclarativeHardwareDriver {
+    fn set_cpu_profile(&self, pl1: u32, pl2: u32, temperature: Option<u32>) -> Result<(), HalError> {
+        DeclarativeHardwareDriver::set_cpu_profile(self, pl1, pl2, temperature)
+    }
+
     fn name(&self) -> &'static str {
         "Declarative-WMI"
     }

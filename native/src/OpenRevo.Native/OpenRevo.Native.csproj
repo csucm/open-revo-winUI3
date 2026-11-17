@@ -17,7 +17,7 @@
     <DefaultItemExcludes>$(DefaultItemExcludes);bin*/**;obj/**</DefaultItemExcludes>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <PublishTrimmed>false</PublishTrimmed><PublishReadyToRun>false</PublishReadyToRun>
-    <Version>0.7.0</Version><Description>Open-Revo native control panel</Description>
+    <Version>$(PublicReleaseVersion)</Version><Description>Open-Revo native control panel</Description>
     <BuildChannel Condition="'$(BuildChannel)'==''">public</BuildChannel>
     <NativePluginFolderEntry Condition="'$(NativePluginFolderEntry)'==''">true</NativePluginFolderEntry>
     <Title>Open-Revo</Title><Product>Open-Revo</Product><Company>Open-Revo Community</Company>

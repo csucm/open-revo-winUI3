@@ -194,6 +194,10 @@ pub fn raw_driver_write_ec(addr: u16, val: u8) -> bool {
 
 /// Direct Win32 IOCTL batch read from \\.\ACPIDriver (with AcpiTest_MULong fallback)
 pub fn raw_driver_batch_read_ec(addrs: &[u16]) -> Option<Vec<u8>> {
+    batch_read_ec(addrs, false).ok()
+}
+
+fn batch_read_ec(addrs: &[u16], strict: bool) -> Result<Vec<u8>, u16> {
     if is_acpi_driver_available() {
         unsafe {
             let name = crate::hal::vault::driver::get_driver_path_null_terminated();
@@ -207,43 +211,52 @@ pub fn raw_driver_batch_read_ec(addrs: &[u16]) -> Option<Vec<u8>> {
                 std::ptr::null_mut(),
             );
             if h != -1 && h != 0 {
-                let mut results = Vec::with_capacity(addrs.len());
-                for &addr in addrs {
-                    let in_buf: [u32; 1] = [addr as u32];
-                    let mut out_buf: u32 = 0;
-                    let mut ret_bytes: u32 = 0;
-                    let ok = DeviceIoControl(
-                        h,
-                        IOCTL_ECREAD,
-                        in_buf.as_ptr() as *const _,
-                        4,
-                        &mut out_buf as *mut u32 as *mut _,
-                        4,
-                        &mut ret_bytes,
-                        std::ptr::null_mut(),
-                    );
-                    if ok != 0 {
-                        results.push((out_buf & 0xFF) as u8);
-                    } else {
-                        results.push(0);
-                    }
-                }
+                let results = addrs
+                    .iter()
+                    .map(|&addr| {
+                        let in_buf: [u32; 1] = [addr as u32];
+                        let mut out_buf: u32 = 0;
+                        let mut ret_bytes: u32 = 0;
+                        let ok = DeviceIoControl(
+                            h,
+                            IOCTL_ECREAD,
+                            in_buf.as_ptr() as *const _,
+                            4,
+                            &mut out_buf as *mut u32 as *mut _,
+                            4,
+                            &mut ret_bytes,
+                            std::ptr::null_mut(),
+                        );
+                        if ok != 0 && (!strict || ret_bytes != 0) {
+                            Ok((out_buf & 0xFF) as u8)
+                        } else if strict {
+                            crate::driver::wmi_mulong::mulong_read_ec(addr).ok_or(addr)
+                        } else {
+                            Ok(0)
+                        }
+                    })
+                    .collect();
                 CloseHandle(h as *mut _);
-                return Some(results);
+                return results;
             }
         }
     }
 
     // Fallback: Driverless native WMI mailbox (AcpiTest_MULong)
     if crate::driver::wmi_mulong::is_mulong_available() {
-        let mut results = Vec::with_capacity(addrs.len());
-        for &addr in addrs {
-            results.push(crate::driver::wmi_mulong::mulong_read_ec(addr).unwrap_or(0));
-        }
-        return Some(results);
+        return addrs
+            .iter()
+            .map(
+                |&addr| match crate::driver::wmi_mulong::mulong_read_ec(addr) {
+                    Some(value) => Ok(value),
+                    None if strict => Err(addr),
+                    None => Ok(0),
+                },
+            )
+            .collect();
     }
 
-    None
+    Err(addrs.first().copied().unwrap_or(0))
 }
 
 /// Direct Win32 IOCTL batch write to \\.\ACPIDriver (with AcpiTest_MULong fallback)
@@ -327,6 +340,12 @@ pub fn wmi_batch_read_ec(addrs: &[u16]) -> Option<Vec<u8>> {
     raw_driver_batch_read_ec(addrs)
 }
 
+/// Transaction snapshots must distinguish a failed read from a register containing zero.
+pub fn wmi_batch_read_ec_checked(addrs: &[u16]) -> Result<Vec<u8>, u16> {
+    let _guard = ACPI_MUTEX.lock();
+    batch_read_ec(addrs, true)
+}
+
 /// Read 1 byte from EC RAM.
 /// High-speed native \\.\ACPIDriver IOCTL.
 pub fn wmi_read_ec(addr: u16) -> Option<u8> {
@@ -359,8 +378,21 @@ pub fn wmi_write_ec(addr: u16, val: u8) -> bool {
 /// Returns `Some(new_val)` if successful, or `None` if read/write failed.
 /// If `f(old_val)` returns the same value as `old_val`, the write IOCTL is skipped for efficiency.
 pub fn wmi_modify_ec<F: FnOnce(u8) -> u8>(addr: u16, f: F) -> Option<u8> {
+    modify_ec(addr, false, f)
+}
+
+/// Use a nonempty EC response for the compare immediately before a write.
+pub fn wmi_modify_ec_checked<F: FnOnce(u8) -> u8>(addr: u16, f: F) -> Option<u8> {
+    modify_ec(addr, true, f)
+}
+
+fn modify_ec<F: FnOnce(u8) -> u8>(addr: u16, checked: bool, f: F) -> Option<u8> {
     let _guard = ACPI_MUTEX.lock();
-    let old_val = raw_driver_read_ec(addr)?;
+    let old_val = if checked {
+        batch_read_ec(&[addr], true).ok()?.first().copied()?
+    } else {
+        raw_driver_read_ec(addr)?
+    };
     let new_val = f(old_val);
     if new_val != old_val {
         if raw_driver_write_ec(addr, new_val) {
@@ -570,6 +602,25 @@ impl Default for HardwareSupportFlags {
     }
 }
 
+/// Read just the cooling capability for the matching device, without probing
+/// unrelated capability bits, lighting, or Windows Bluetooth pairing.
+pub fn has_native_water_cooler() -> bool {
+    if let Some(manifest) = crate::hal::declarative::matched_manifest() {
+        return manifest.capabilities.water_cooling;
+    }
+    crate::hal::platform_probe::is_tongfang_family()
+        && !crate::hal::platform_probe::is_ultrabook()
+        && ec_water_cooling_detected()
+}
+
+fn ec_water_cooling_detected() -> bool {
+    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        wmi_read_ec(ADDR_AP_BIOS_BYTE).is_some_and(|value| value & MASK_LIQUID_COOLING_SUPPORT != 0)
+            || wmi_read_ec(ADDR_WATER_COOLER_FLAG).is_some_and(|value| value & 0x10 != 0)
+    })
+}
+
 /// Query physical motherboard EC hardware support flags dynamically (SupportByte1 & SupportByte2 & BIOS Capability).
 /// Caches the result with OnceLock since physical hardware capabilities do not change at runtime.
 pub fn get_hardware_support_flags() -> HardwareSupportFlags {
@@ -611,12 +662,8 @@ pub fn get_hardware_support_flags() -> HardwareSupportFlags {
         }
 
         // Truth-layer detection: query BIOS Capability byte, peripheral handshake status, or Windows paired cooler
-        let raw_cooler_status = wmi_read_ec(ADDR_WATER_COOLER_FLAG).unwrap_or(0);
-        let has_water_cooler = if let Some(b) = wmi_read_ec(ADDR_AP_BIOS_BYTE) {
-            (b & MASK_LIQUID_COOLING_SUPPORT) != 0 || (raw_cooler_status & 0x10) != 0
-        } else {
-            (raw_cooler_status & 0x10) != 0
-        } || crate::driver::ble_cooler::find_paired_water_cooler_mac().is_some();
+        let has_water_cooler = ec_water_cooling_detected()
+            || crate::driver::ble_cooler::find_paired_water_cooler_mac().is_some();
 
         if let Some(bytes) = wmi_batch_read_ec(&[ADDR_SUPPORT_BYTE1, ADDR_SUPPORT_BYTE2]) {
             if bytes.len() == 2 {

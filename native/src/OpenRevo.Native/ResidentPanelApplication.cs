@@ -40,7 +40,7 @@ public sealed partial class MainWindow
 
     private async Task ReadResidentStartupAsync()
     {
-        if (residentStartupRead || residentStartupReading || closed || residentDetaching || residentSnapshot?.Ready != true) return;
+        if (!residentFirstFrameReady || residentStartupRead || residentStartupReading || closed || residentDetaching || residentSnapshot?.Ready != true) return;
         residentStartupReading = true;
         try
         {

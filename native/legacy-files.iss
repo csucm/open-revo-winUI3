@@ -1,5 +1,11 @@
 [InstallDelete]
+; Former installer-owned archive. Leave other files in the source folder intact.
+Type: files; Name: "{app}\source\native-source.zip"
 #ifdef NativeResident
+Type: files; Name: "{app}\Microsoft.Windows.SDK.NET.dll"
+Type: files; Name: "{app}\WinRT.Runtime.dll"
+Type: files; Name: "{app}\PluginWorker\Microsoft.Windows.SDK.NET.dll"
+Type: files; Name: "{app}\PluginWorker\WinRT.Runtime.dll"
 ; Fixed former managed resident entry files; user data and shared Core/Protocol are retained.
 Type: files; Name: "{app}\OpenRevo.Resident.dll"
 Type: files; Name: "{app}\OpenRevo.Resident.deps.json"

@@ -1,5 +1,9 @@
 # 公开版本与仓库维护记录
 
+## 0.7.1
+
+分离限充读取异常与其他硬件接管能力，加入已确认限充目标的安全恢复，改善托盘唤起及性能档位刷新。见 [0.7.1 更新日志](docs/releases/0.7.1.md)和 [GitHub 发布页](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.7.1)。
+
 ## 0.7.0 开机自启热修复 · 2026-11-12
 
 修复登录时任务栏尚未就绪导致的自启弹窗和后台退出。登录自启延后 3 秒，手动打开仍即时启动。已安装 0.7.0 的用户可在软件内检查更新。 [发布页](https://github.com/csucm/open-revo-winUI3/releases/tag/native-v0.7.0.0)。

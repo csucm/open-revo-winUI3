@@ -1,12 +1,14 @@
 //! Native owner of the application control session. No initialization on load.
 //! Register writes use the existing admitted executors, not the upstream mode loop.
-#[path = "tuning.rs"]
-mod tuning;
 #[path = "startup_factory_mode.rs"]
 mod startup_factory_mode;
+#[path = "battery_policy.rs"]
+mod battery_policy;
+#[path = "tuning.rs"]
+mod tuning;
 use super::platform::{ac_online, check_conflicts, gm7tg0m_identity, OperationLock};
 use crate::native_admission as admission;
-use openrevo_core::{driver::wmi_ec as ec, system::power};
+use openrevo_core::driver::wmi_ec as ec;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -31,70 +33,44 @@ mod camera;
 pub use camera::Camera;
 #[path = "telemetry_hal.rs"]
 mod telemetry_hal;
+// The actor and panel lifetime workers share this append-only journal.
+static AUDIT_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ControlState {
     pub project: u8,
     pub fan_clamp: u8,
-    pub upper: u8,
-    pub lower: u8,
-    pub battery_mode: u8,
     pub platform: u8,
     pub support1: u8,
     pub support2: u8,
     pub power_status: u8,
-    pub battery_limit_reached: bool,
 }
 impl ControlState {
     fn read() -> Result<Self, String> {
-        let upper = read(1977)?;
-        let state = Self {
-            project: read(1856)?,
-            fan_clamp: read(1873)?,
-            upper: upper & 127,
-            lower: read(2000)?,
-            battery_mode: read(1958)?,
-            platform: read(1987)?,
-            support1: read(1893)?,
-            support2: read(1894)?,
-            power_status: read(1996)?,
-            battery_limit_reached: upper & 128 != 0,
+        // Only shared identity, capability, fan and power fields belong here.
+        // Battery registers are read separately even on the same EC transport.
+        let bytes = ec::wmi_batch_read_ec_checked(&[
+            ec::ADDR_PROJECT_ID, ec::ADDR_FAN_BOOST_CLAMP, ec::ADDR_PLATFORM_REAL_ID,
+            ec::ADDR_SUPPORT_BYTE1, ec::ADDR_SUPPORT_BYTE2, 1996,
+        ])
+        .map_err(|address| format!("硬件读取失败 {address:#06x}"))?;
+        let [project, fan_clamp, platform, support1, support2, power_status] = bytes[..] else {
+            return Err("硬件读取失败：控制快照长度无效".into());
         };
-        if matches!(state.project, 0 | 255)
-            || !(40..=100).contains(&state.upper)
-            || state.lower > state.upper
-            || matches!(state.platform, 4 | 5)
-        {
-            return Err("当前电池阈值、项目或平台状态不满足普通控制条件".into());
-        }
+        let state = Self { project, fan_clamp, platform, support1, support2, power_status };
+        state.validate()?;
         Ok(state)
     }
-    fn raw_upper(&self) -> u8 {
-        self.upper | if self.battery_limit_reached { 128 } else { 0 }
-    }
-    fn battery_available(&self) -> bool {
-        self.support2 & 64 != 0
-            || self.lower.checked_add(5) == Some(self.upper)
-                && (matches!(
-                    (self.upper, self.battery_mode & 49),
-                    (60, 33) | (80, 17) | (100, 1)
-                ) || matches!(self.project, 16 | 26)
-                    && matches!(self.upper, 60 | 80)
-                    && self.battery_mode & 49 == 1)
-    }
-    fn battery_matches(&self, other: &Self) -> bool {
-        let selector = self.battery_mode == other.battery_mode
-            || self.project == 26
-                && self.lower.checked_add(5) == Some(self.upper)
-                && matches!(self.upper, 60 | 80)
-                && (self.battery_mode ^ other.battery_mode) & !49 == 0
-                && [1, if self.upper == 60 { 33 } else { 17 }].contains(&(self.battery_mode & 49))
-                && [1, if self.upper == 60 { 33 } else { 17 }].contains(&(other.battery_mode & 49));
-        self.project == other.project
-            && self.upper == other.upper
-            && self.lower == other.lower
-            && selector
+
+    fn validate(&self) -> Result<(), String> {
+        if matches!(self.project, 0 | 255) {
+            return Err(format!("EC 项目无效：{}", self.project));
+        }
+        if matches!(self.platform, 4 | 5) {
+            return Err(format!("平台覆盖状态不允许普通控制：{}", self.platform));
+        }
+        Ok(())
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -112,17 +88,26 @@ pub struct PerformanceState {
 }
 impl PerformanceState {
     fn read() -> Result<Self, String> {
+        let mut addresses: Vec<u16> = (3840..3936).collect();
+        addresses.extend([1990, 1857, 1963, 1115, 1798, 1989, 1927, 1873, 1895]);
+        let mut tables = ec::wmi_batch_read_ec_checked(&addresses)
+            .map_err(|address| format!("硬件读取失败 {address:#06x}"))?;
+        let [latch, ap, index, silent, custom, isolated, ramp, clamp, trigger] = tables[96..]
+        else {
+            unreachable!("one byte per EC address")
+        };
+        tables.truncate(96);
         Ok(Self {
-            tables: (3840..3936).map(read).collect::<Result<_, _>>()?,
-            latch: read(1990)?,
-            ap: read(1857)?,
-            index: read(1963)?,
-            silent: read(1115)?,
-            custom: read(1798)?,
-            isolated: read(1989)?,
-            ramp: read(1927)?,
-            clamp: read(1873)?,
-            trigger: read(1895)?,
+            tables,
+            latch,
+            ap,
+            index,
+            silent,
+            custom,
+            isolated,
+            ramp,
+            clamp,
+            trigger,
         })
     }
     pub fn mode(&self, root: Option<&ControlState>) -> u8 {
@@ -149,15 +134,16 @@ impl PerformanceState {
                 _ => {}
             }
         }
-        if custom & 1 != 0 {
-            4
-        } else if clamp & 176 == 160 {
-            1
-        } else if index & 30 == 16 {
-            3
-        } else {
-            2
-        }
+        admission::decode_classic_mode(custom, clamp, index)
+    }
+    fn read_mode(root: Option<&ControlState>) -> Option<u8> {
+        let bytes = ec::wmi_batch_read_ec_checked(&[
+            ec::ADDR_CUSTOM_MODE, ec::ADDR_FAN_BOOST_CLAMP, ec::ADDR_MODE_INDEX, ec::ADDR_FAN_ISOLATED,
+        ]).ok()?;
+        let [custom, clamp, index, isolated] = <[u8; 4]>::try_from(bytes).ok()?;
+        Some(Self::decode_mode(
+            custom, clamp, index, isolated, root.map(|r| (r.project, r.platform)),
+        ))
     }
     fn matches(&self, other: &Self) -> bool {
         self.tables == other.tables
@@ -182,33 +168,11 @@ impl PerformanceState {
         }
     }
     fn factory(&self, mode: u8) -> Result<Self, String> {
-        let table =
-            serde_json::to_value(power::get_mode_fan_table(mode)).map_err(|e| e.to_string())?;
-        let mut tables = Vec::with_capacity(96);
-        for key in [
-            "cpu_upt",
-            "cpu_downt",
-            "cpu_duty",
-            "gpu_upt",
-            "gpu_downt",
-            "gpu_duty",
-        ] {
-            let row = table[key]
-                .as_array()
-                .filter(|r| r.len() == 16)
-                .ok_or("Core风扇表不完整")?;
-            for value in row {
-                tables.push(
-                    value
-                        .as_u64()
-                        .and_then(|n| u8::try_from(n).ok())
-                        .ok_or("Core风扇表字节无效")?,
-                );
-            }
-        }
-        tables[95] = tables[95].max(160);
         let desired = Self {
-            tables,
+            tables: admission::classic_factory_table(mode)
+                .into_iter()
+                .flatten()
+                .collect(),
             latch: 4,
             ap: self.ap | 129,
             index: (self.index & !30) | if mode == 3 { 16 } else { 0 },
@@ -256,6 +220,12 @@ pub struct Receipt {
     pub warning: Option<String>,
     pub payload: Option<Value>,
 }
+#[derive(Clone, Copy)]
+enum FactorySelection {
+    Set(u8, bool),
+    Cycle(u32),
+}
+
 impl Receipt {
     pub fn new(outcome: Outcome) -> Self {
         Self {
@@ -276,6 +246,8 @@ impl Receipt {
 pub struct HardwareSession {
     pub admission: Value,
     pub state: Option<ControlState>,
+    battery_state: Option<battery_policy::BatteryState>,
+    battery_faulted: bool,
     pub performance: Option<PerformanceState>,
     pub tuning_baseline: Option<(String, TuningSnapshot)>,
     pub faulted: bool,
@@ -293,6 +265,8 @@ impl HardwareSession {
         Self {
             admission: Value::Null,
             state: None,
+            battery_state: None,
+            battery_faulted: false,
             performance: None,
             tuning_baseline: None,
             faulted: false,
@@ -314,25 +288,28 @@ impl HardwareSession {
     }
     pub fn supports(&self, key: &str) -> bool {
         self.admission["ready"] == true && self.admission["capabilities"][key] == true
+            && (key != "battery" || !self.battery_faulted)
     }
     pub fn audit(&self, operation: &str, value: Value) -> Result<(), String> {
-        super::platform::validate_directory(&self.root)?;
+        Self::audit_at(&self.root, operation, value)
+    }
+    pub(super) fn audit_at(root: &std::path::Path, operation: &str, value: Value) -> Result<(), String> {
+        let _journal = AUDIT_WRITE.lock().unwrap_or_else(|e| e.into_inner());
+        super::platform::validate_directory(root)?;
         let mut file = OpenOptions::new()
             .custom_flags(0x00200000)
             .create(true)
             .append(true)
-            .open(self.root.join("hardware-audit.jsonl"))
+            .open(root.join("hardware-audit.jsonl"))
             .map_err(|e| e.to_string())?;
         let metadata = file.metadata().map_err(|e| e.to_string())?;
         if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
             return Err("硬件审计目标不是普通文件".into());
         }
-        writeln!(
-            file,
-            "{}",
-            json!({"operation":operation,"atUnixMs":super::platform::unix_ms(),"state":value})
-        )
-        .map_err(|e| e.to_string())
+        let mut line = serde_json::to_vec(&json!({"operation":operation,
+            "atUnixMs":super::platform::unix_ms(),"state":value})).map_err(|e| e.to_string())?;
+        line.push(b'\n');
+        file.write_all(&line).map_err(|e| e.to_string())
     }
     fn guard(&self) -> Result<(), String> {
         check_conflicts()?;
@@ -347,23 +324,31 @@ impl HardwareSession {
         Ok(())
     }
     pub fn takeover(&mut self) -> Receipt {
+        self.takeover_core(false)
+    }
+    pub fn takeover_at_startup(&mut self) -> Receipt {
+        self.takeover_core(true)
+    }
+    fn takeover_core(&mut self, recover_battery: bool) -> Receipt {
         let result: Result<(), String> = (|| {
             let _lock = OperationLock::enter()?;
-            self.admission = admission::probe_with_mode_sample(gm7tg0m_identity());
+            self.admission = admission::probe_for_resident(gm7tg0m_identity());
             self.guard()?;
+            self.battery_state = None;
+            self.battery_faulted = false;
             if !self.classic() {
                 self.delegated_active = true;
-                self.tuning_baseline = None;
                 self.state = None;
+                self.performance = None;
                 self.mode = self.admission["mode"].as_u64().map(|v| v as u8);
             } else {
                 let root = ControlState::read()?;
                 if Some(u64::from(root.project)) != self.admission["project"].as_u64() {
                     return Err("接管项目不匹配".into());
                 }
-                // A new control snapshot must not retain receipts from an old session.
                 let performance = PerformanceState::read()?;
                 self.mode = Some(performance.mode(Some(&root)));
+                self.admission["fan_boost"] = json!(root.fan_clamp & ec::FAN_BOOST_CLAMP_BIT != 0);
                 self.state = Some(root);
                 self.performance = Some(performance);
                 self.delegated_active = false;
@@ -373,15 +358,19 @@ impl HardwareSession {
             self.temporary_office = None;
             self.last_performance = None;
             self.requested_boost = None;
-            self.audit("takeover-read-only",json!({"admission":self.admission,"control":self.state,"performance":self.performance}))?;
+            self.audit("takeover-read-only",
+                json!({"admission":self.admission,"control":self.state,"performance":self.performance}))?;
             Ok(())
         })();
         match result {
-            Ok(()) => Receipt {
-                mode: self.mode,
-                ..Receipt::new(Outcome::ReadbackConfirmed)
-            },
+            Ok(()) => {
+                let battery = self.synchronize_battery(recover_battery);
+                let mut receipt = Receipt { mode: self.mode, ..Receipt::new(Outcome::ReadbackConfirmed) };
+                receipt.warning = battery.message.or(battery.warning);
+                receipt
+            }
             Err(e) => {
+                let _ = self.audit("takeover-rejected", json!({"error":e,"admission":self.admission}));
                 self.release();
                 Receipt::error(Outcome::Rejected, e)
             }
@@ -390,6 +379,8 @@ impl HardwareSession {
     pub fn release(&mut self) {
         self.tuning_baseline = None;
         self.state = None;
+        self.battery_state = None;
+        self.battery_faulted = false;
         self.performance = None;
         self.delegated_active = false;
         self.faulted = false;
@@ -434,7 +425,7 @@ impl HardwareSession {
             }
             "fanBoost.set" => self.boost(action.arguments["enabled"] == true),
             "battery.limit.set" => {
-                self.battery(action.arguments["percent"].as_u64().unwrap_or(0) as u8)
+                self.battery(action.arguments["percent"].as_u64().and_then(|value| u8::try_from(value).ok()).unwrap_or(0))
             }
             _ => Receipt::new(Outcome::Rejected),
         };
@@ -445,90 +436,46 @@ impl HardwareSession {
         if !matches!(upper, 60 | 80 | 100) {
             return Receipt::error(Outcome::Rejected, "仅支持 60 / 80 / 100 三档");
         }
-        self.control_change(Some(upper), None)
+        if self.battery_faulted {
+            return Receipt::error(Outcome::Rejected, "上次限充写入未确认，请重新接管后读取限充");
+        }
+        if let Err(error) = self.authorized() {
+            return Receipt::error(Outcome::Rejected, error);
+        }
+        if self.classic() {
+            self.set_classic_battery(upper)
+        } else {
+            self.declared_control("battery", 1, u32::from(upper))
+        }
     }
     pub fn boost(&mut self, enabled: bool) -> Receipt {
-        self.control_change(None, Some(enabled))
-    }
-    fn control_change(&mut self, upper: Option<u8>, boost: Option<bool>) -> Receipt {
+        if !self.classic() {
+            return self.declared_control("fan_boost", 2, u32::from(enabled));
+        }
         let mut attempted = false;
-        let result: Result<Outcome, String> = (|| {
+        let result = (|| {
             let _lock = OperationLock::enter()?;
-            let key = if upper.is_some() {
-                "battery"
-            } else {
-                "fan_boost"
-            };
-            self.ready(key)?;
-            if !self.classic() {
-                self.authorized()?;
-                attempted = true;
-                let code = admission::or_native_declared_control(
-                    if upper.is_some() { 1 } else { 2 },
-                    upper
-                        .map(u32::from)
-                        .unwrap_or(u32::from(boost == Some(true))),
-                );
-                if code != 0 {
-                    return Err(format!("Core 声明式控制失败 ({code})"));
-                }
-                if boost.is_some() {
-                    self.requested_boost = boost;
-                }
-                self.audit(
-                    "declared-command-sent",
-                    json!({"feature":key,"upper":upper,"boost":boost}),
-                )?;
-                return Ok(Outcome::CommandSent);
-            }
+            self.ready("fan_boost")?;
             let before = ControlState::read()?;
             self.check_root(&before)?;
             let expected = self.state.as_ref().ok_or("缺少接管快照")?;
-            if if upper.is_some() {
-                !expected.battery_matches(&before)
-            } else {
-                expected.fan_clamp != before.fan_clamp
-            } {
+            if expected.fan_clamp != before.fan_clamp {
                 return Err("硬件状态已变化，请重新读取接管".into());
             }
+            if before.support1 & 128 == 0 {
+                return Err("EC 未声明支持强冷".into());
+            }
             let mut desired = before.clone();
-            let request = if let Some(upper) = upper {
-                if !before.battery_available() {
-                    return Err("当前充电阈值不符合受支持的控制协议".into());
-                }
-                desired.upper = upper;
-                desired.lower = upper - 5;
-                desired.battery_limit_reached = false;
-                desired.battery_mode = (before.battery_mode & !49)
-                    | match upper {
-                        60 => 33,
-                        80 => 17,
-                        _ => 1,
-                    };
-                json!({"kind":"battery","project":before.project,"oldUpper":before.raw_upper(),"oldLower":before.lower,
-                    "oldMode":before.battery_mode,"upper":desired.upper,"lower":desired.lower,"mode":desired.battery_mode})
-            } else {
-                if before.support1 & 128 == 0 {
-                    return Err("EC 未声明支持强冷".into());
-                }
-                desired.fan_clamp = if boost == Some(true) {
-                    before.fan_clamp | 64
-                } else {
-                    before.fan_clamp & !64
-                };
-                json!({"kind":"boost","project":before.project,"before":before.fan_clamp,"after":desired.fan_clamp})
-            };
+            desired.fan_clamp = if enabled { before.fan_clamp | 64 } else { before.fan_clamp & !64 };
             self.audit("control-intent", json!({"before":before,"desired":desired}))?;
             self.guard()?;
             self.authorized()?;
             attempted = true;
-            admission::apply_classic_transaction(request)?;
+            admission::apply_classic_transaction(json!({"kind":"boost","project":before.project,
+                "before":before.fan_clamp,"after":desired.fan_clamp}))?;
             let after = ControlState::read()?;
-            if if upper.is_some() {
-                !desired.battery_matches(&after)
-            } else {
-                desired.fan_clamp != after.fan_clamp
-            } {
+            self.check_root(&after)?;
+            if desired.fan_clamp != after.fan_clamp {
                 return Err("最终控制状态未保持目标值".into());
             }
             self.state = Some(after.clone());
@@ -537,15 +484,52 @@ impl HardwareSession {
         })();
         self.finish(result, attempted)
     }
+
+    fn declared_control(&mut self, key: &str, feature: u32, target: u32) -> Receipt {
+        let mut attempted = false;
+        let result = (|| {
+            let _lock = OperationLock::enter()?;
+            self.ready(key)?;
+            self.authorized()?;
+            attempted = true;
+            let code = admission::or_native_declared_control(feature, target);
+            if code != 0 {
+                return Err(format!("Core 声明式控制失败 ({code})"));
+            }
+            let (upper, boost) = if feature == 1 { (Some(target), None) } else { (None, Some(target == 1)) };
+            if boost.is_some() {
+                self.requested_boost = boost;
+            }
+            self.audit("declared-command-sent", json!({"feature":key,"upper":upper,"boost":boost}))?;
+            Ok(Outcome::CommandSent)
+        })();
+        if feature == 1 {
+            self.finish_battery(result, attempted, None)
+        } else {
+            self.finish(result, attempted)
+        }
+    }
+
     pub fn select_factory(&mut self, mode: u8, dc_confirmed: bool) -> Receipt {
-        let mut receipt = self.apply_factory(mode, dc_confirmed);
-        if matches!(receipt.outcome, Outcome::ReadbackConfirmed) && receipt.mode == Some(mode) {
-            self.remember_factory_mode(Some(mode), &mut receipt);
+        self.select_and_remember(FactorySelection::Set(mode, dc_confirmed))
+    }
+    pub fn cycle_factory(&mut self, code: u32) -> Receipt {
+        self.select_and_remember(FactorySelection::Cycle(code))
+    }
+    fn select_and_remember(&mut self, selection: FactorySelection) -> Receipt {
+        let mut receipt = self.apply_factory(selection);
+        if matches!(receipt.outcome, Outcome::ReadbackConfirmed)
+            && receipt.mode.is_some_and(|confirmed| match selection {
+                FactorySelection::Set(mode, _) => mode == confirmed,
+                FactorySelection::Cycle(_) => (1..=3).contains(&confirmed),
+            })
+        {
+            self.remember_factory_mode(receipt.mode, &mut receipt);
         }
         receipt
     }
-    fn apply_factory(&mut self, mode: u8, dc_confirmed: bool) -> Receipt {
-        let receipt = self.change_performance(mode, dc_confirmed, None, None, true, true);
+    fn apply_factory(&mut self, selection: FactorySelection) -> Receipt {
+        let receipt = self.change_performance(selection, None, None, true, true);
         openrevo_core::driver::nvapi::release_session();
         receipt
     }
@@ -562,14 +546,21 @@ impl HardwareSession {
                 Err(error) => return Receipt::error(Outcome::Unknown, error),
                 _ => {}
             }
-            let result = self.change_performance(1, false, None, None, false, false);
+            let result =
+                self.change_performance(FactorySelection::Set(1, false), None, None, false, false);
             if matches!(result.outcome, Outcome::ReadbackConfirmed) {
                 self.temporary_office = self.last_performance.clone();
             }
             result
         } else if let Some((before, after)) = self.temporary_office.take() {
             let mode = before.mode(self.state.as_ref());
-            self.change_performance(mode, true, Some(after), Some(before), false, false)
+            self.change_performance(
+                FactorySelection::Set(mode, true),
+                Some(after),
+                Some(before),
+                false,
+                false,
+            )
         } else {
             Receipt::new(Outcome::Skipped)
         }
@@ -579,12 +570,14 @@ impl HardwareSession {
             return Ok(());
         }
         let power = read(1996)?;
-        if !self.allow_battery
-            && (!dc_confirmed || ac_online() != Some(true) || power & 62 != 0 && power & 1 == 0)
-        {
+        if !self.turbo_allowed(dc_confirmed, power) {
             return Err("狂暴模式需要原装 DC 确认及交流供电；解除离电限制须在设置页确认".into());
         }
         Ok(())
+    }
+    fn turbo_allowed(&self, dc_confirmed: bool, power: u8) -> bool {
+        self.allow_battery
+            || dc_confirmed && ac_online() == Some(true) && (power & 62 == 0 || power & 1 != 0)
     }
     fn controls(&self, project: u8, steps: &[(u16, u8, u8)]) -> Result<(), String> {
         self.guard()?;
@@ -593,14 +586,14 @@ impl HardwareSession {
     }
     fn change_performance(
         &mut self,
-        mode: u8,
-        dc: bool,
+        selection: FactorySelection,
         required: Option<PerformanceState>,
         target: Option<PerformanceState>,
         replace_oem: bool,
         reset_gpu: bool,
     ) -> Receipt {
-        if !(1..=3).contains(&mode) {
+        let started = std::time::Instant::now();
+        if matches!(selection, FactorySelection::Set(mode, _) if !(1..=3).contains(&mode)) {
             return Receipt::error(Outcome::Rejected, "原厂档位范围为 1..3");
         }
         let mut attempted = false;
@@ -609,11 +602,13 @@ impl HardwareSession {
             let _lock = OperationLock::enter()?;
             self.ready("performance")?;
             if !self.classic() {
+                let FactorySelection::Set(mode, _) = selection else {
+                    return Err("当前机型不支持经典实体档位键".into());
+                };
                 if mode == 3 && !self.allow_battery && ac_online() != Some(true) {
                     return Err("狂暴模式需要交流供电".into());
                 }
-                let live = admission::probe();
-                let before = live["mode"].as_u64().ok_or("Core 未提供当前档位")?;
+                let before = admission::declared_mode().ok_or("Core 未提供当前档位")?;
                 self.audit("core-mode-intent", json!({"before":before,"target":mode}))?;
                 self.guard()?;
                 if !attempted {
@@ -621,18 +616,38 @@ impl HardwareSession {
                 }
                 attempted = true;
                 let code =
-                    admission::or_native_declarative_mode_set(before as u32, u32::from(mode));
+                    admission::or_native_declarative_mode_set(u32::from(before), u32::from(mode));
                 if code != 0 {
                     return Err(format!("Core 档位控制未确认 ({code})"));
                 }
-                self.admission = admission::probe();
+                self.admission["mode"] = json!(mode);
                 self.mode = Some(mode);
-                self.audit("core-mode-confirmed", json!({"before":before,"after":mode}))?;
+                warning = self
+                    .audit("core-mode-confirmed", json!({"before":before,"after":mode}))
+                    .err()
+                    .map(|error| format!("档位已确认，审计记录写入失败（{error}）"));
                 return Ok(Outcome::ReadbackConfirmed);
             }
             let root = ControlState::read()?;
             self.check_root(&root)?;
             let before = PerformanceState::read()?;
+            let before_mode = before.mode(Some(&root));
+            let (mode, dc) =
+                match selection {
+                    FactorySelection::Set(mode, dc) => (mode, dc),
+                    FactorySelection::Cycle(code) => {
+                        let limited = !self.turbo_allowed(true, root.power_status);
+                        let mode = match before_mode {
+                            1 => 2,
+                            2 if !limited => 3,
+                            _ => 1,
+                        };
+                        let _ = self.audit("modekey.intent", json!({
+                        "code":code,"before":before_mode,"target":mode,"batteryLimited":limited
+                    }));
+                        (mode, true)
+                    }
+                };
             if !replace_oem && !before.recognized(false) {
                 return Err("当前不是已验证的风扇表协议，未修改性能".into());
             }
@@ -641,31 +656,22 @@ impl HardwareSession {
             }
             self.check_power(mode, dc)?;
             let desired = match target {
-                Some(value) => value,
+                Some(value) if value.recognized(true) => value,
+                Some(_) => return Err("恢复目标不是允许的原厂协议".into()),
                 None => before.factory(mode)?,
             };
-            if !desired.recognized(true) {
-                return Err("恢复目标不是允许的原厂协议".into());
-            }
-            let gpu = reset_gpu.then(super::gpu::GpuState::probe);
-            let offsets = gpu
-                .as_ref()
-                .and_then(|g| g.offsets.as_ref())
-                .map(|o| (o.core_mhz, o.memory_mhz));
-            if before.mode(Some(&root)) == 4
-                && gpu
-                    .as_ref()
-                    .is_some_and(|g| g.capabilities.supported && g.offsets.is_none())
-            {
-                return Err("无法确认显卡超频状态，请先重新读取".into());
-            }
+            let offsets = if reset_gpu && self.admission["discrete_gpu"] != false {
+                super::gpu::factory_offsets(before_mode == 4)?
+            } else {
+                None
+            };
             self.audit(
                 "performance-intent",
                 json!({"before":before,"desired":desired,"replaceOem":replace_oem}),
             )?;
             self.guard()?;
             self.check_power(mode, dc)?;
-            if let Some((core, memory)) = offsets.filter(|v| *v != (0, 0)) {
+            if let Some((core, memory)) = offsets {
                 if !attempted {
                     self.authorized()?;
                 }
@@ -715,14 +721,23 @@ impl HardwareSession {
             self.performance = Some(after.clone());
             self.last_performance = Some((before.clone(), after.clone()));
             self.tuning_baseline = None;
-            self.audit(
-                "performance-confirmed",
-                json!({"before":before,"after":after}),
-            )?;
+            let audit_error = self
+                .audit(
+                    "performance-confirmed",
+                    json!({"before":before,"after":after,"transactionMs":started.elapsed().as_millis() as u64}),
+                )
+                .err();
             // Indicator failure must not invalidate a confirmed performance transaction.
             let code = self.synchronize_indicator();
             if code != 0 {
                 warning = Some(format!("性能已确认，模式指示灯未同步 ({code})"));
+            }
+            if let Some(error) = audit_error {
+                let detail = format!("档位已确认，审计记录写入失败（{error}）");
+                warning = Some(match warning.take() {
+                    Some(message) => format!("{message}。{detail}"),
+                    None => detail,
+                });
             }
             Ok(Outcome::ReadbackConfirmed)
         })();
@@ -775,8 +790,8 @@ impl HardwareSession {
             self.mode = Some(current.mode(self.state.as_ref()));
             self.performance = Some(current);
         } else {
-            self.admission = admission::probe();
-            self.mode = self.admission["mode"].as_u64().map(|n| n as u8);
+            self.mode = admission::declared_mode();
+            self.admission["mode"] = json!(self.mode);
         }
         Ok(self.mode)
     }
@@ -789,14 +804,12 @@ impl HardwareSession {
             Err(e) => return Receipt::error(Outcome::Rejected, e),
         };
         let current = if self.classic() {
-            PerformanceState::read()
-                .ok()
-                .map(|p| p.mode(self.state.as_ref()))
+            PerformanceState::read_mode(self.state.as_ref())
         } else {
-            admission::probe()["mode"].as_u64().map(|m| m as u8)
+            admission::declared_mode()
         };
         let result = if matches!(current, Some(3 | 4)) {
-            self.apply_factory(2, false)
+            self.apply_factory(FactorySelection::Set(2, false))
         } else {
             Receipt::new(Outcome::Skipped)
         };
@@ -918,6 +931,11 @@ impl HardwareSession {
             }
             self.guard()?;
             let key = if id == 3 { "touchpad" } else { "fn_lock" };
+            if id == 4 && !self.supports("fn_lock")
+                || id == 3 && !self.classic() && self.admission["touchpad_control"] != true
+            {
+                return Err("Core未声明此开关".into());
+            }
             let before = if self.classic() {
                 Some(ControlState::read()?)
             } else {
@@ -925,10 +943,6 @@ impl HardwareSession {
             };
             if let Some(before) = &before {
                 self.check_root(before)?;
-            } else if id == 3 && self.admission["touchpad_control"] != true
-                || id == 4 && !self.supports("fn_lock")
-            {
-                return Err("Core未声明此开关".into());
             }
             let (address, mask) = if id == 3 { (1958, 8) } else { (1870, 16) };
             let desired = if before.is_some() {
@@ -954,19 +968,18 @@ impl HardwareSession {
                 u32::from(expected),
                 u32::from(target),
             );
-            if code != 0 || crate::native_overview::switch_read(id) != Some(target)
-            {
+            if code != 0 {
                 return Err(format!("设备回读未确认 ({code})"));
             }
-            if let (Some(mut expected), Some(desired)) = (before, desired) {
-                if id == 3 {
-                    expected.battery_mode = desired;
-                }
+            if let (Some(expected), Some(desired)) = (before, desired) {
                 let after = ControlState::read()?;
                 if read(address)? != desired || after != expected {
                     return Err("开关或无关硬件位回读不一致".into());
                 }
                 self.state = Some(after);
+                if id == 3 {
+                    self.update_battery_touchpad_bit(desired);
+                }
             }
             self.audit(
                 "overview-switch-confirmed",

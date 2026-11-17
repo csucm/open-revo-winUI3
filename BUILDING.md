@@ -1,4 +1,4 @@
-# 构建 OpenRevo 0.7.0
+# 构建 OpenRevo 0.7.1
 
 当前工程在 `native/`，使用 C# / WinUI 3、原生 Rust 常驻内核和 Inno Setup。
 
@@ -19,8 +19,8 @@
 & .\native\build.ps1 `
   -Iscc 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' `
   -ResidentLayout -NativeResident `
-  -Variant release-070 `
-  -OutputName Open-Revo-0.7.0-Setup-x64
+  -Variant release-071 `
+  -OutputName Open-Revo-0.7.1-Setup-x64
 ```
 
 `-DotNet` 与 `-Cargo` 可指定工具位置。仅在依赖已还原且缓存完整时使用 `-Offline`。保留锁文件，不以重新解析依赖代替故障定位。
@@ -35,6 +35,6 @@
 
 ## 发布
 
-见 [维护说明](MAINTENANCE.md) 和 [0.7.0 更新日志](docs/releases/0.7.0.md)。发布只包含安装包及完整 GPL 对应源码，使用 `native-v` 标签和用户指定的公开版本。内部测试代号不自动推进发布号。
+见 [维护说明](MAINTENANCE.md) 和 [0.7.1 更新日志](docs/releases/0.7.1.md)。发布只包含安装包及完整 GPL 对应源码，使用 `native-v` 标签和用户指定的公开版本。内部测试代号不自动推进发布号。
 
 原 Tauri 的 Node/pnpm、NSIS、Slint 与 Gitee 镜像流程仅保存在[旧工程归档](https://github.com/csucm/open-revo-winUI3/tree/archive-tauri-web-20261107)，不是当前 Native 的发布入口。

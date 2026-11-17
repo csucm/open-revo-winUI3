@@ -142,7 +142,7 @@ impl Telemetry {
             }
             if details_requested && hardware.classic() {
                 use openrevo_core::driver::wmi_ec as ec;
-                battery = ec::wmi_read_ec(ec::ADDR_BATTERY_LIMIT_UP).map(|v| v & 127);
+                battery = hardware.battery_limit();
                 boost = ec::wmi_read_ec(ec::ADDR_FAN_BOOST_CLAMP).map(|v| v & 64 != 0);
             }
         }
