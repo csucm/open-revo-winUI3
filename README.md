@@ -14,6 +14,9 @@
 
 OpenRevo WinUI 3 版基于上游 OpenRevo，由社区维护。在一个面板中查看硬件状态、切换性能档位、设置充电上限，以及调整屏幕和键盘背光。完整面板适合查看数据和调整设置，托盘里的 Mini 小面板适合随手切换常用选项。
 
+> [!IMPORTANT]
+> **本项目免费提供安装包和对应源码。** OpenRevo WinUI 3 版由社区独立维护，与机械革命、同方及其他硬件厂商无隶属或背书关系。 [项目发布页](https://github.com/csucm/open-revo-winUI3/releases) · [开源许可证](LICENSE)
+
 ## 界面预览
 
 <table>
@@ -47,10 +50,19 @@ WinUI 3 面板与 Rust 后台分开运行。关闭面板后，界面进程退出
 2. 覆盖升级前，从托盘菜单完全退出旧版。运行安装器，按提示检查 .NET 10 x64 Desktop Runtime 和 Windows App Runtime。
 3. 安装后从开始菜单打开 OpenRevo。需要使用设备控制时，在「设置与诊断」中检查硬件接管状态。关闭面板后，可从托盘重新打开。
 
+## 开源与分发
+
+本项目采用 **GPL-3.0-or-later**。你可以按许可证使用、研究、修改和再分发软件。再分发时须遵守相应的许可证、版权声明和对应源码义务。第三方收费分发并不代表项目授权或背书。如果下载页以本项目名义收费，请通过本仓库核对来源。 [许可证全文](LICENSE)
+
+## 使用注意与免责声明
+
+- **硬件调校。** 修改功耗、风扇曲线或显卡模式前，请先保存工作、记下原设置，确认设备和供电条件支持该操作。同一项硬件设置请只交由一个控制工具管理。若出现异常，请停止调校，从托盘完全退出 OpenRevo，并检查设备状态。
+- **兼容与担保。** 社区无法验证所有机型、固件和驱动组合。在适用法律允许的范围内，软件按现状提供，不作明示或默示担保。担保与责任限制详见许可证第 15 至 17 节。 [许可证全文](LICENSE)
+
 ## 源码与反馈
 
-遇到设备兼容问题时，请在反馈中注明具体机型、BIOS 版本和复现步骤。诊断报告可从「设置与诊断」导出。 [提交问题](https://github.com/csucm/open-revo-winUI3/issues) · [诊断说明](native/DIAGNOSTICS.md)
+遇到设备兼容问题时，请在反馈中注明具体机型、BIOS 版本和复现步骤。诊断报告可从「设置与诊断」导出。上传前请查看报告内容，移除不愿公开的信息。 [提交问题](https://github.com/csucm/open-revo-winUI3/issues) · [诊断说明](native/DIAGNOSTICS.md)
 
 开发者可从 `native/` 开始。 [构建说明](BUILDING.md) · [文档导航](docs/README.md) · [历史版本记录](CHANGELOG.md)
 
-WinUI 3 版源自 [faintonce/open-revo](https://github.com/faintonce/open-revo)，采用 [GPL-3.0-or-later](LICENSE) 许可证。
+WinUI 3 版源自 [faintonce/open-revo](https://github.com/faintonce/open-revo)。
