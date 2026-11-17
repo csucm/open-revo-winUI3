@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/csucm/open-revo-winUI3/releases/latest"><strong>Download for Windows x64</strong></a> ·
+  <a href="#plugin-development-and-contributing">Develop plugins</a> ·
   <a href="https://github.com/csucm/open-revo-winUI3/issues">Report an issue</a> ·
   <a href="README.md">简体中文</a>
 </p>
@@ -31,18 +32,43 @@ These screenshots are from an earlier WinUI build. The controls and live reading
 
 ## Features
 
+### Redesigned WinUI 3 interface and customizable layouts
+
+- **Full dashboard and Mini panel.** The full dashboard brings hardware readings and everyday controls together, with dedicated pages for graphics and display, power and battery, lighting and devices, and settings. Open Mini from the tray to switch profiles, adjust brightness, or use shortcuts while you work.
+- **Arrange your dashboard.** Use **Edit tiles** on the dashboard to add, remove, and drag tiles. Put the CPU, GPU, video memory, or fan readings you watch most often first. Save the layout or discard your edits. [Tile editor preview](docs/previews/native-0.9.8/overview-editing.png)
+- **Set up Mini separately.** In **Settings & Diagnostics → Mini customization**, choose and reorder the upper tiles and fill up to six quick-access slots at the bottom. Drag controls from the library, swap positions, leave slots empty, or restore the default layout. Save to apply your choices.
+- **Choose your theme, motion and on-screen notifications.** Pick light, dark, or the Windows theme. Adjust or turn off interface animations, with respect for the Windows reduced-motion setting. Choose the on-screen display (OSD) style, size, and position and preview it in settings. The tray can open Mini or the full dashboard, or remember the last panel you used. Mini can also hide when you click outside it. [OSD settings preview](docs/previews/native-0.9.8/osd-settings.png)
+
+### Hardware control and monitoring
+
 | Area | What you can do |
 | --- | --- |
-| Hardware monitoring | See live CPU, GPU, video memory, and fan readings. Customize the tiles on the dashboard. |
-| Performance and cooling | Switch between Office, Balanced, and Turbo profiles. On supported devices, use fan boost or tune power limits and fan curves. |
-| Power and battery | Check battery and AC status, select a charge limit preset, and manage sleep and power settings. |
-| Graphics and display | Switch GPU modes, adjust brightness and refresh rate, and lower the refresh rate on battery where supported. |
-| Lighting and quick controls | Adjust the keyboard backlight brightness, color, and effects. Use device shortcuts from the dashboard or Mini panel, with on-screen notifications for profile changes. |
-| Tray and appearance | Customize Mini tiles and shortcuts, choose which panel opens from the tray, and switch between light and dark themes. |
+| Live monitoring | View CPU and GPU temperatures, frequencies, utilization, and power, plus video memory and fan speeds. Available readings vary by device. |
+| Performance and cooling | Switch between Office, Balanced, and Turbo. On supported devices, use fan boost, tune CPU and GPU power and fan curves, and save tuning presets. |
+| Power and battery | Check battery and AC status, select a 60%, 80%, or 100% charge limit preset on supported devices, and manage sleep and power settings. |
+| Graphics and display | Where supported, choose integrated, hybrid, or discrete graphics, adjust the built-in display brightness and refresh rate, and lower the refresh rate on battery. |
+| Lighting and shortcuts | Adjust backlight brightness, colors, and effects according to your keyboard type. Use shortcuts such as touchpad, Fn Lock, and Windows key lock where supported. |
 
 The WinUI 3 panel and Rust background process run separately. Closing the panel ends the UI process while the background process keeps the tray icon and enabled policies running. Choose **Exit** in the tray menu to stop the background process.
 
 Hardware features depend on the model, firmware, drivers, and current device state. Even laptops in the same series may offer different graphics, lighting, or cooling controls.
+
+## Plugin development and contributing
+
+**Developers are welcome to help build the OpenRevo native plugin system.** Create a plugin or color theme, or help improve the SDK, examples, documentation, and tests. The C#/.NET 10 SDK supports native pages rendered by the WinUI host, system state and power event subscriptions, per-plugin settings, and static color themes. Plugin code runs in an isolated process. The host checks user authorization and device capabilities before handling actions such as performance profiles, fan boost, and charge limits.
+
+1. Start with the [plugin development guide](native/plugin-dev/README.md) and the [starter template](native/plugin-dev/template/). You can also explore the [system summary example](native/plugin-dev/SystemSummary/) or the [static theme example](native/plugin-dev/NaiwaTheme/).
+2. Build the SDK and examples in PowerShell from the repository root.
+
+   ```powershell
+   & .\native\plugin-dev\Build-Framework.ps1 -OutputDirectory .\work\native-plugin-framework
+   ```
+
+   Choose a folder from the build output's `examples` directory. Place the entire folder, including `plugin.json`, under `plugins` in the OpenRevo installation directory, then select **Refresh** on the plugin page. Review the [capabilities and permissions](native/PLUGIN-API-INVENTORY.md) before adding hardware actions.
+
+3. To propose a new API or improve the framework, describe your use case and the data and permissions it needs in [Issues](https://github.com/csucm/open-revo-winUI3/issues), or submit a pull request. We welcome contributions to native controls, layouts, theme coverage, plugin lifecycle, and developer tools.
+
+The plugin API is under development. Use the host capability query to determine what is available. [Plugin SDK source](native/src/OpenRevo.PluginSdk/) · [Native plugin framework](native/NATIVE-PLUGIN-FRAMEWORK.md)
 
 ## Install and use
 
